@@ -1,0 +1,14 @@
+# Playwright artifacts
+.playwright-mcp/
+
+# Screenshots
+*.png
+*.jpg
+*.jpeg
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
