@@ -1,0 +1,77 @@
+{
+  ".claude/settings.json": {
+    "mtime": 1781600128.079776,
+    "ast_hash": "e1073342e958ac9f00716938c8f165e3",
+    "semantic_hash": "e1073342e958ac9f00716938c8f165e3"
+  },
+  ".planning/config.json": {
+    "mtime": 1781160151.8812766,
+    "ast_hash": "9aff255fcae7667b740ce495f0296fce",
+    "semantic_hash": "9aff255fcae7667b740ce495f0296fce"
+  },
+  "scripts/linkedin-ensure-login.js": {
+    "mtime": 1781165267.2614584,
+    "ast_hash": "96bb65ad2db45482d683c65836ff1b87",
+    "semantic_hash": "96bb65ad2db45482d683c65836ff1b87"
+  },
+  "scripts/linkedin-grow-runner.sh": {
+    "mtime": 1781165267.2599561,
+    "ast_hash": "9538ff90131506f5f97a05b355f5c5a3",
+    "semantic_hash": "9538ff90131506f5f97a05b355f5c5a3"
+  },
+  ".planning/PROJECT.md": {
+    "mtime": 1781159701.479022,
+    "ast_hash": "d33831f5227b47ef977d6cff745f7a71",
+    "semantic_hash": ""
+  },
+  ".planning/research/ARCHITECTURE.md": {
+    "mtime": 1781160726.148927,
+    "ast_hash": "10afdc09dc140bb2cc4b36da4695e3ed",
+    "semantic_hash": ""
+  },
+  ".planning/research/FEATURES.md": {
+    "mtime": 1781160778.3250675,
+    "ast_hash": "883435b7bd6543bc093dc8ced15c2a06",
+    "semantic_hash": ""
+  },
+  ".planning/research/PITFALLS.md": {
+    "mtime": 1781160791.2674415,
+    "ast_hash": "c8f65f9b1a9f948b7e6a7278975a3d19",
+    "semantic_hash": ""
+  },
+  ".planning/research/STACK.md": {
+    "mtime": 1781160757.4873927,
+    "ast_hash": "53604353422828f043ba64dbdc823bef",
+    "semantic_hash": ""
+  },
+  ".planning/research/SUMMARY.md": {
+    "mtime": 1781160975.3073258,
+    "ast_hash": "8adc61b5da7ab9352636be1adadab96c",
+    "semantic_hash": ""
+  },
+  "AUTOMATION.md": {
+    "mtime": 1781165314.7401006,
+    "ast_hash": "1c8eef416d9f01e77b1c6ff7105aba6c",
+    "semantic_hash": ""
+  },
+  "CLAUDE.md": {
+    "mtime": 1781600128.0795856,
+    "ast_hash": "82efb97a359f5c7290bf2513d14686be",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1781165497.027751,
+    "ast_hash": "c710a8ded453c8a58030e54efc7a55fc",
+    "semantic_hash": ""
+  },
+  "REMOTE-JOBS-RESEARCH.md": {
+    "mtime": 1781158317.5990355,
+    "ast_hash": "1a39bdd224dab60399b71fbcb6f48a7e",
+    "semantic_hash": ""
+  },
+  "docs/superpowers/specs/2026-06-16-dev-skill-design.md": {
+    "mtime": 1781604941.7925458,
+    "ast_hash": "1e00565f22f44d4f970cc26ca6bb34fc",
+    "semantic_hash": ""
+  }
+}
