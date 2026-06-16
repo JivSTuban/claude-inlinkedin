@@ -1,6 +1,9 @@
 # Playwright artifacts
 .playwright-mcp/
 
+# Graphify (generated — do not track)
+graphify-out/
+
 # Screenshots
 *.png
 *.jpg
