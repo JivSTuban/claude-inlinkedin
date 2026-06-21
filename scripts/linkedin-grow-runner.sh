@@ -1,5 +1,7 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 TIMESTAMP_FILE="$HOME/.linkedin_grow_last_run"
 TODAY=$(date +%Y-%m-%d)
 CURRENT_HOUR=$((10#$(date +%H)))
@@ -18,7 +20,7 @@ fi
 echo "[$(date)] Starting /linkedin-grow for $TODAY..."
 
 # Phase 1: ensure LinkedIn session is active (waits up to 5 min for login if needed)
-node /Users/jivtuban/linkedin-ensure-login.js
+node "$SCRIPT_DIR/linkedin-ensure-login.js"
 LOGIN_CODE=$?
 
 if [ $LOGIN_CODE -ne 0 ]; then
@@ -27,8 +29,8 @@ if [ $LOGIN_CODE -ne 0 ]; then
 fi
 
 # Phase 2: run the automation with the saved session
-cd /Users/jivtuban/Desktop/jobi
-/opt/homebrew/bin/claude --dangerously-skip-permissions --print "/linkedin-grow" < /dev/null
+cd "$REPO_DIR"
+claude --dangerously-skip-permissions --print "/linkedin-grow" < /dev/null
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then

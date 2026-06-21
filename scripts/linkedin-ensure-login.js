@@ -2,10 +2,10 @@
 // Phase 1: Open persistent Playwright profile, wait for LinkedIn login (email/password).
 // Exits 0 when session is saved, exits 1 on timeout.
 
-const { chromium } = require('/Users/jivtuban/.npm/_npx/9833c18b2d85bc59/node_modules/playwright');
+const { chromium } = require('playwright');
 
-const CHROMIUM = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const PROFILE  = process.env.HOME + '/.playwright-linkedin-profile';
+const CHROMIUM = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const PROFILE  = process.env.PLAYWRIGHT_PROFILE || (process.env.HOME + '/.playwright-linkedin-profile');
 const TIMEOUT  = 5 * 60 * 1000;
 
 (async () => {

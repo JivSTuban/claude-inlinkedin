@@ -13,5 +13,8 @@ graphify-out/
 .env
 .env.*
 
+# Internal planning
+.planning/
+
 # OS
 .DS_Store
