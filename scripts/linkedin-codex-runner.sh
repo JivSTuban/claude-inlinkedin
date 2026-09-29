@@ -3,8 +3,12 @@
 #   linkedin-codex-runner.sh outreach   daily: inbox replies, follow-ups, pre-drafted sends, new drafts
 #   linkedin-codex-runner.sh inbox      every 2h: inbox auto-replies + escalations only
 #   add --dry-run to either: decide everything, send nothing (writes needs-jiv.dryrun.jsonl)
-# Runs the Mini's ~/.codex/skills/linkedin skill via the `linkedin` Codex profile
-# (~/.codex/linkedin.config.toml), which supplies the linkedin-browser Playwright MCP
+# The inbox pass never lets Codex touch the browser: scripts/linkedin-inbox.js reads the
+# inbox into a small digest, Codex (profile `linkedin-inbox`, no browser MCP) decides and
+# writes the replies to a file, then linkedin-inbox.js sends and verifies them. Codex
+# browsing the inbox itself cost ~3M tokens a run and ate the ChatGPT quota on 2026-09-30.
+# The outreach part still runs the Mini's ~/.codex/skills/linkedin skill via the `linkedin`
+# profile (~/.codex/linkedin.config.toml), which supplies the linkedin-browser Playwright MCP
 # on the dedicated ~/.linkedin-codex-profile. Setup + gotchas: AUTOMATION.md,
 # section "Mac Mini + Codex".
 #
@@ -15,6 +19,7 @@
 #   LINKEDIN_MAX_SECONDS  override the run cap
 #   LINKEDIN_CODEX_BIN  stand-in for `codex` (tests exercise the cap and usage-limit paths
 #                       without spending ChatGPT quota)
+#   LINKEDIN_INBOX_BIN  stand-in for `node scripts/linkedin-inbox.js` (same reason: no Chrome)
 
 set -u
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -26,6 +31,7 @@ TEST_DIR="${LINKEDIN_TEST_DIR:-}"
 PROFILE_DIR="$HOME/.linkedin-codex-profile"
 LOCK_DIR="/tmp/linkedin-codex-run.lock"
 CODEX="${LINKEDIN_CODEX_BIN:-codex}"
+INBOX_BIN="${LINKEDIN_INBOX_BIN:-node $SCRIPT_DIR/linkedin-inbox.js}"
 MAX_SECONDS="${LINKEDIN_MAX_SECONDS:-2700}"   # 45 min cap; macOS has no `timeout`, so perl alarm below
 TODAY=$(date +%Y-%m-%d)
 
@@ -90,27 +96,75 @@ alert_once() {
 
 echo "[$(date)] $MODE${DRY_RUN:+ (dry run)}${TEST_DIR:+ (TEST)}: starting \$linkedin run"
 
-BASE='No human is attached, so never ask a question: follow /Users/admin/.codex/skills/linkedin/SKILL.md in Scheduled Automation Mode. Use the linkedin-browser MCP for every LinkedIn page.'
-if [ "$MODE" = inbox ]; then
-    PROMPT="Scheduled INBOX-ONLY run of \$linkedin. $BASE Do the Inbox Auto-Reply pass and the tracking pass only: no search, no new connection notes. Close the browser when done."
-else
-    PROMPT="Scheduled automation run of \$linkedin. $BASE Start with the Inbox Auto-Reply pass, then the rest of the scheduled flow. Update the tracker, append the run report in this folder, then close the browser."
-fi
-[ -n "$DRY_RUN" ] && PROMPT="DRY RUN: send nothing, follow the skill's Dry run rules. $PROMPT"
-[ -n "$TEST_DIR" ] && PROMPT="TEST MODE: LinkedIn origin is ${LINKEDIN_TEST_BASE:-https://www.linkedin.com} and the outreach folder is $TEST_DIR; follow the skill's Test Mode section. $PROMPT"
-
+SKILL='No human is attached, so never ask a question: follow /Users/admin/.codex/skills/linkedin/SKILL.md in Scheduled Automation Mode.'
 SUMMARY="$LOG_DIR/$TODAY-$MODE-$(date +%H%M%S)-summary.md"
+INBOX_DIR="$OUTREACH_DIR/.inbox"
 LOG_START=$(wc -c < "$LOG")
-perl -e 'alarm shift; exec @ARGV' "$MAX_SECONDS" \
-    "$CODEX" exec --profile linkedin --skip-git-repo-check \
-        -C "$OUTREACH_DIR" \
-        -o "$SUMMARY" \
-        "$PROMPT" < /dev/null
-EXIT_CODE=$?
 
+prefix() {   # DRY RUN / TEST MODE framing shared by every Codex prompt
+    local p="$1"
+    [ -n "$DRY_RUN" ] && p="DRY RUN: send nothing, follow the skill's Dry run rules. $p"
+    [ -n "$TEST_DIR" ] && p="TEST MODE: LinkedIn origin is ${LINKEDIN_TEST_BASE:-https://www.linkedin.com} and the outreach folder is $TEST_DIR; follow the skill's Test Mode section. $p"
+    echo "$p"
+}
+run_codex() {   # run_codex <profile> <summary file> <prompt>
+    perl -e 'alarm shift; exec @ARGV' "$MAX_SECONDS" \
+        "$CODEX" exec --profile "$1" --skip-git-repo-check -C "$OUTREACH_DIR" -o "$2" "$3" < /dev/null
+}
 # codex exec exits 0 even when the run couldn't do its job (the first dry run did
-# exactly that), so the skill must end with RUN_STATUS=ok for the run to count.
-RUN_STATUS=$(grep -o 'RUN_STATUS=[^[:space:]`]*' "$SUMMARY" 2>/dev/null | tail -1)
+# exactly that), so every pass must end with RUN_STATUS=ok for the run to count.
+status_of() { grep -o 'RUN_STATUS=[^[:space:]`]*' "$1" 2>/dev/null | tail -1; }
+
+# Inbox pass: linkedin-inbox.js reads, Codex decides with no browser, linkedin-inbox.js
+# sends + verifies. Writes its RUN_STATUS to $1; returns Codex's exit code (142 = cap).
+inbox_pass() {
+    local sum="$1" rc n
+    rm -rf "$INBOX_DIR"; mkdir -p "$INBOX_DIR"
+    $INBOX_BIN read --out "$INBOX_DIR/digest.json" ${LINKEDIN_TEST_BASE:+--base "$LINKEDIN_TEST_BASE"}
+    rc=$?
+    if [ $rc -eq 3 ]; then
+        echo "Inbox: LinkedIn showed a login wall, nothing read. RUN_STATUS=blocked:linkedin_session_expired" > "$sum"; return 0
+    elif [ $rc -ne 0 ] || [ ! -s "$INBOX_DIR/digest.json" ]; then
+        echo "Inbox: reader failed (exit $rc). RUN_STATUS=blocked:inbox_reader_failed" > "$sum"; return 0
+    fi
+    n=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["threads"]))' "$INBOX_DIR/digest.json" 2>/dev/null || echo 0)
+    if [ "$n" = 0 ]; then
+        echo "Inbox: no conversation awaits a reply, Codex not started. RUN_STATUS=ok" > "$sum"; return 0
+    fi
+    run_codex linkedin-inbox "$sum" "$(prefix "INBOX DIGEST run of \$linkedin. $SKILL Follow its Inbox Digest Mode section: the runner already read the inbox into $INBOX_DIR/digest.json ($n conversations whose last message is from the other person). You have no browser in this run; never try to open LinkedIn. Apply the Inbox Auto-Reply rules to every thread in the digest, write the auto-replies to $INBOX_DIR/actions.json, append escalations to needs-jiv.jsonl, record the tracker rows, and stop. No tracking pass, no search, no connection notes.")"
+    rc=$?
+    [ $rc -ne 0 ] && return $rc
+    [ -n "$DRY_RUN" ] && return 0
+    [ "$(status_of "$sum")" = "RUN_STATUS=ok" ] || return 0
+    $INBOX_BIN send --actions "$INBOX_DIR/actions.json" --digest "$INBOX_DIR/digest.json" \
+        --log "$OUTREACH_DIR/inbox-sent.jsonl" ${LINKEDIN_TEST_BASE:+--base "$LINKEDIN_TEST_BASE"}
+    rc=$?
+    if [ $rc -eq 3 ]; then echo "RUN_STATUS=blocked:linkedin_session_expired" >> "$sum"
+    elif [ $rc -ne 0 ]; then echo "RUN_STATUS=blocked:inbox_send_failed (see inbox-sent.jsonl)" >> "$sum"; fi
+    return 0
+}
+
+if [ "$MODE" = inbox ]; then
+    inbox_pass "$SUMMARY"
+    EXIT_CODE=$?
+else
+    INBOX_SUMMARY="${SUMMARY%-summary.md}-inbox-summary.md"
+    inbox_pass "$INBOX_SUMMARY"
+    EXIT_CODE=$?
+    INBOX_STATUS=$(status_of "$INBOX_SUMMARY")
+    if [ $EXIT_CODE -eq 0 ] && ! grep -q linkedin_session_expired "$INBOX_SUMMARY" \
+        && ! tail -c +$((LOG_START + 1)) "$LOG" | grep -q 'hit your usage limit'; then
+        run_codex linkedin "$SUMMARY" "$(prefix "Scheduled automation run of \$linkedin. $SKILL Use the linkedin-browser MCP for every LinkedIn page. The runner already did the Inbox Auto-Reply pass this run (results in inbox-sent.jsonl), so skip it and start with the tracking pass, then the rest of the scheduled flow. Update the tracker, append the run report in this folder, then close the browser.")"
+        EXIT_CODE=$?
+    else
+        cp "$INBOX_SUMMARY" "$SUMMARY" 2>/dev/null
+    fi
+    # A failed inbox pass fails the run even when the outreach part went fine.
+    [ $EXIT_CODE -eq 0 ] && [ "$INBOX_STATUS" != "RUN_STATUS=ok" ] \
+        && echo "${INBOX_STATUS:-RUN_STATUS=missing} (inbox pass)" >> "$SUMMARY"
+fi
+
+RUN_STATUS=$(status_of "$SUMMARY")
 echo "[$(date)] $MODE: ${RUN_STATUS:-RUN_STATUS missing}"
 if [ $EXIT_CODE -eq 0 ] && [ "$RUN_STATUS" != "RUN_STATUS=ok" ]; then
     EXIT_CODE=3

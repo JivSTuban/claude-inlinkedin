@@ -12,8 +12,16 @@ crontab  17 9,11,14 * * 1-5  runner.sh outreach   (daily; 11:17/14:17 are retrie
   └── scripts/linkedin-codex-runner.sh      (copy lives at ~/agent-work/jobi on the Mini)
         ├── skips if another run holds /tmp/linkedin-codex-run.lock or Chrome has the
         │   profile open; outreach also skips once today succeeded (~/.linkedin_codex_last_run)
-        ├── codex exec --profile linkedin  -C ~/Work/job-email-bot/marketing/outreach
-        │     ├── skill:   ~/.codex/skills/linkedin (Scheduled Automation Mode + Inbox Auto-Reply)
+        ├── INBOX PASS (inbox mode, and first step of outreach mode). Codex never browses it:
+        │     ├── node scripts/linkedin-inbox.js read  -> .inbox/digest.json (threads whose
+        │     │     last message is from them; ~7KB). Login wall -> exit 3, Codex not started;
+        │     │     nothing awaiting a reply -> Codex not started
+        │     ├── codex exec --profile linkedin-inbox  (codex/linkedin-inbox.config.toml, NO
+        │     │     browser MCP; skill section "Inbox Digest Mode") -> .inbox/actions.json
+        │     └── node scripts/linkedin-inbox.js send  types each reply, verifies it on the
+        │           page, rejects dash/phone text, logs to inbox-sent.jsonl
+        ├── OUTREACH (outreach mode only): codex exec --profile linkedin -C ~/Work/job-email-bot/marketing/outreach
+        │     ├── skill:   ~/.codex/skills/linkedin (Scheduled Automation Mode, inbox pass skipped)
         │     ├── profile: ~/.codex/linkedin.config.toml  (approval never, sandbox writes
         │     │            only the outreach folder, folder pre-trusted)
         │     └── MCP:     linkedin-browser = @playwright/mcp@0.0.83, real Chrome,
@@ -26,6 +34,7 @@ crontab  17 9,11,14 * * 1-5  runner.sh outreach   (daily; 11:17/14:17 are retrie
 | What | Where (on the Mini) |
 |------|---------------------|
 | Tracker + run reports | `~/Work/job-email-bot/marketing/outreach/` |
+| Inbox replies sent (one line per send: sent / unverified / rejected / failed) | `inbox-sent.jsonl` there; this run's digest + actions in `.inbox/` |
 | Escalations (DM'd once each) | `needs-jiv.jsonl` there; posted count in `~/.linkedin_needs_jiv_posted` |
 | Runner logs + per-run summary | `~/Library/Logs/linkedin-codex/<date>.log`, `<date>-<mode>-<HHMM>-summary.md` |
 | LinkedIn session | `~/.linkedin-codex-profile` (Chrome, Playwright mock keychain) |
@@ -45,11 +54,12 @@ cd ~/agent-work/jobi && PLAYWRIGHT_PROFILE=~/.linkedin-codex-profile LOGIN_TIMEO
 Sign in with email/password in the Chrome window that opens; it closes itself once the feed loads.
 
 **Battle tests** (`tests/battle/`, run on the Mini):
-- `run_runner_tests.sh`: 20 deterministic checks, no quota spent (fake-codex shims): overlap lock, Chrome already open, daily stamp, 45-min cap kills Chrome + frees the lock, alert once per day, dash audit, usage-limit pause, notifier dedupe, Discord failure keeps the queue, real files untouched.
+- `run_runner_tests.sh`: 22 deterministic checks, no quota spent (fake-codex shims): overlap lock, Chrome already open, daily stamp, 45-min cap kills Chrome + frees the lock, alert once per day, dash audit, usage-limit pause, login wall and empty inbox never start Codex, notifier dedupe, Discord failure keeps the queue, real files untouched.
 - `run_battle.sh 1|2|login`: the real runner, skill, Codex and Chrome profile against `mock_linkedin.py`, a fake LinkedIn inbox of 23 adversarial threads (`cases.json`: rate/scheduling/offer/resume asks, prompt injection, phishing, dash bait, confidential questions, Taglish small talk, sponsored/system noise, stale messages, a login wall). `assert_battle.py` judges only recorded evidence (`sent.jsonl`, `needs-jiv.jsonl`, sign-in attempts, exit code, RUN_STATUS). Each round costs real ChatGPT quota.
 - `battle-gate.sh`: one-shot release gate. Live cron lines parked as `#BATTLE-GATE ...` are re-enabled only if every round passes; Jiv gets the verdict on Discord.
 
 **Mini-specific gotchas:**
+- **Never let Codex browse the inbox.** Through the Playwright MCP one inbox run was ~36 tool calls and **~3M tokens** (27-43K character page snapshots, each re-read on every later turn), and two test runs used up the ChatGPT 5-hour window on 2026-09-30. `linkedin-inbox.js` reads and sends; Codex only reads the ~7KB digest. Selectors checked against real LinkedIn on 2026-09-30: list `[aria-label="Conversation List"] li.msg-conversation-listitem`, thread `.msg-s-message-list-content`, sender `.msg-s-message-group__name`, composer `div.msg-form__contenteditable`, `button.msg-form__send-button`. The list preview often shows a subject line instead of "You:", so who spoke last is read from the thread.
 - **The ChatGPT plan behind Codex has a usage limit, shared with the Mini's other Codex automations.** It ran out on 2026-09-30 after a morning of dry runs. The runner reads "try again at HH:MM" from Codex's error, pauses all runs until then (`~/.linkedin_codex_blocked_until`), and DMs once. This profile runs at `model_reasoning_effort = "medium"` and the inbox every 3h to stay under it.
 - **Don't reuse `~/.playwright-linkedin-profile` on the Mini.** A long-running Claude Code Discord bot (tmux `work`) has its Playwright plugin pointed at it, so sharing it means profile-lock collisions.
 - **The global `~/.codex/config.toml` is never edited**: it runs the ChatGPT.app automations with full access. Everything LinkedIn-specific lives in the `linkedin` profile file, which `codex mcp list` without `--profile linkedin` doesn't show.

@@ -1,0 +1,21 @@
+# Codex profile: `linkedin-inbox` - the inbox pass of the LinkedIn runs, NO browser.
+# Install on the Mac Mini as ~/.codex/linkedin-inbox.config.toml. Launched by
+# scripts/linkedin-codex-runner.sh as `codex exec --profile linkedin-inbox ...`.
+# scripts/linkedin-inbox.js reads the inbox into .inbox/digest.json and later sends the
+# replies Codex writes to .inbox/actions.json, so Codex only reads files and decides.
+# WHY: Codex browsing the inbox via the Playwright MCP cost ~3M tokens a run and ran the
+# ChatGPT plan out of quota on 2026-09-30. No mcp_servers here on purpose.
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+model_reasoning_effort = "medium"
+
+[sandbox_workspace_write]
+# REAL path, not ~/Desktop/Work (a symlink; Codex rejects symlinked writable roots).
+writable_roots = [
+  "/Users/admin/Work/job-email-bot/marketing/outreach",
+]
+network_access = false
+
+[projects."/Users/admin/Work/job-email-bot/marketing/outreach"]
+trust_level = "trusted"

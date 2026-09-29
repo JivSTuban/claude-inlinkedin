@@ -57,7 +57,14 @@ touch "$(dirname "$0")/limit-called"
 echo "ERROR: You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at ${LIMIT_TIME:-11:59 PM}."
 exit 1
 SH
-chmod +x "$SHIMS"/codex-*
+# Stand-in for linkedin-inbox.js: one thread awaiting a reply, so the runner reaches Codex.
+cat > "$SHIMS/inbox-one" <<'SH'
+#!/bin/bash
+[ "$1" = read ] && echo '{"threads":[{"n":1,"name":"T","thread_url":"http://x/messaging/thread/t/"}]}' > "$3"
+exit 0
+SH
+chmod +x "$SHIMS"/codex-* "$SHIMS/inbox-one"
+export LINKEDIN_INBOX_BIN="$SHIMS/inbox-one"
 fresh cap
 printf '{"note":"seeded \xe2\x80\x94 dash"}\n' > "$T/linkedin-outreach-tracker.json"
 LINKEDIN_CODEX_BIN="$SHIMS/codex-hang" LINKEDIN_MAX_SECONDS=5 run inbox; RC1=$?
@@ -85,6 +92,17 @@ fresh limit-past
 LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" LIMIT_TIME="12:01 AM" run inbox
 UNTIL=$(cat "$T/.state/.linkedin_codex_blocked_until" 2>/dev/null || echo 0)
 chk '[ "$(date -r "$UNTIL" +%F)" = "$(date -v+1d +%F)" ]' "usage limit: a reset time already past means tomorrow"
+
+# 5c. inbox reader paths that must never spend quota: login wall and an empty inbox
+printf '#!/bin/bash\nexit 3\n' > "$SHIMS/inbox-wall"
+printf '#!/bin/bash\n[ "$1" = read ] && echo %s > "$3"\nexit 0\n' "'{\"threads\":[]}'" > "$SHIMS/inbox-empty"
+chmod +x "$SHIMS/inbox-wall" "$SHIMS/inbox-empty"
+fresh wall; rm -f "$SHIMS/limit-called"
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-wall" LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" run inbox; RC=$?
+chk '[ $RC -eq 3 ] && [ ! -e "$SHIMS/limit-called" ] && grep -q "notify dry\] LinkedIn session on the Mini expired" "$LOGF"' "inbox: login wall exits 3, alerts, never starts Codex (got $RC)"
+fresh empty
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-empty" LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/limit-called" ]' "inbox: nothing awaiting a reply, Codex never started (got $RC)"
 
 # 6. notifier: each escalation once, malformed line survives, state advances
 fresh notify; Q="$T/q.jsonl"; S="$T/state"
