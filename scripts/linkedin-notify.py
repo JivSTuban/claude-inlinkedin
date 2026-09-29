@@ -14,11 +14,13 @@ import sys
 import urllib.request
 
 HOME = os.path.expanduser("~")
-ENV_FILE = os.path.join(HOME, ".claude/channels/discord/.env")
+ENV_FILE = os.environ.get("LINKEDIN_NOTIFY_TOKEN_FILE", os.path.join(HOME, ".claude/channels/discord/.env"))
 # The bot's DM channel with Jiv (also where job-followup alerts were meant to go).
 CHANNEL = os.environ.get("LINKEDIN_NOTIFY_CHANNEL", "1487505450369814680")
-QUEUE = os.path.join(HOME, "Work/job-email-bot/marketing/outreach/needs-jiv.jsonl")
-STATE = os.path.join(HOME, ".linkedin_needs_jiv_posted")
+QUEUE = os.environ.get("LINKEDIN_NOTIFY_QUEUE", os.path.join(HOME, "Work/job-email-bot/marketing/outreach/needs-jiv.jsonl"))
+STATE = os.environ.get("LINKEDIN_NOTIFY_STATE", os.path.join(HOME, ".linkedin_needs_jiv_posted"))
+# Test hook: print instead of posting (tests/battle/ and the runner's test mode set it).
+DRY = os.environ.get("LINKEDIN_NOTIFY_DRY") == "1"
 
 
 def token():
@@ -29,6 +31,9 @@ def token():
 
 
 def post(text):
+    if DRY:
+        print("[notify dry] " + text.replace("\n", " | ")[:1990], flush=True)
+        return
     req = urllib.request.Request(
         f"https://discord.com/api/v10/channels/{CHANNEL}/messages",
         data=json.dumps({"content": text[:1990]}).encode(),

@@ -21,3 +21,4 @@ graphify-out/
 
 # Dependencies
 node_modules/
+__pycache__/

@@ -8,7 +8,7 @@ Outreach now runs on the always-on Mac Mini (`admin@100.98.219.58`, Tailscale) w
 
 ```
 crontab  17 9,11,14 * * 1-5  runner.sh outreach   (daily; 11:17/14:17 are retries)
-         47 8-22/2 * * *     runner.sh inbox      (every 2h, every day)
+         47 8-20/3 * * *     runner.sh inbox      (every 3h, every day)
   └── scripts/linkedin-codex-runner.sh      (copy lives at ~/agent-work/jobi on the Mini)
         ├── skips if another run holds /tmp/linkedin-codex-run.lock or Chrome has the
         │   profile open; outreach also skips once today succeeded (~/.linkedin_codex_last_run)
@@ -44,7 +44,13 @@ cd ~/agent-work/jobi && PLAYWRIGHT_PROFILE=~/.linkedin-codex-profile LOGIN_TIMEO
 
 Sign in with email/password in the Chrome window that opens; it closes itself once the feed loads.
 
+**Battle tests** (`tests/battle/`, run on the Mini):
+- `run_runner_tests.sh`: 20 deterministic checks, no quota spent (fake-codex shims): overlap lock, Chrome already open, daily stamp, 45-min cap kills Chrome + frees the lock, alert once per day, dash audit, usage-limit pause, notifier dedupe, Discord failure keeps the queue, real files untouched.
+- `run_battle.sh 1|2|login`: the real runner, skill, Codex and Chrome profile against `mock_linkedin.py`, a fake LinkedIn inbox of 23 adversarial threads (`cases.json`: rate/scheduling/offer/resume asks, prompt injection, phishing, dash bait, confidential questions, Taglish small talk, sponsored/system noise, stale messages, a login wall). `assert_battle.py` judges only recorded evidence (`sent.jsonl`, `needs-jiv.jsonl`, sign-in attempts, exit code, RUN_STATUS). Each round costs real ChatGPT quota.
+- `battle-gate.sh`: one-shot release gate. Live cron lines parked as `#BATTLE-GATE ...` are re-enabled only if every round passes; Jiv gets the verdict on Discord.
+
 **Mini-specific gotchas:**
+- **The ChatGPT plan behind Codex has a usage limit, shared with the Mini's other Codex automations.** It ran out on 2026-09-30 after a morning of dry runs. The runner reads "try again at HH:MM" from Codex's error, pauses all runs until then (`~/.linkedin_codex_blocked_until`), and DMs once. This profile runs at `model_reasoning_effort = "medium"` and the inbox every 3h to stay under it.
 - **Don't reuse `~/.playwright-linkedin-profile` on the Mini.** A long-running Claude Code Discord bot (tmux `work`) has its Playwright plugin pointed at it, so sharing it means profile-lock collisions.
 - **The global `~/.codex/config.toml` is never edited**: it runs the ChatGPT.app automations with full access. Everything LinkedIn-specific lives in the `linkedin` profile file, which `codex mcp list` without `--profile linkedin` doesn't show.
 - **`codex exec` denies MCP tools that aren't read-only** under `approval_policy = "never"` ("MCP tool call requires approval, but approval policy is never"): snapshot works, navigate/click/type don't. The `linkedin-browser` server sets `default_tools_approval_mode = "approve"` (scoped to that server only). Verified 2026-09-30: Codex loaded the feed logged in as Jiv, and a cron-launched headed Chrome found the session.
