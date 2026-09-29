@@ -7,23 +7,30 @@ Daily LinkedIn growth automation (connections, follows, post engagement) running
 Outreach now runs on the always-on Mac Mini (`admin@100.98.219.58`, Tailscale) with **Codex CLI**, not Claude Code: Codex is authed from `~/.codex/auth.json` there, so headless runs work and cost nothing extra. The pm2 + `/linkedin-grow` path below is the older MacBook setup and is not scheduled anywhere.
 
 ```
-crontab  17 9,11,14 * * 1-5   (Mini local time = PHT; 11:17 and 14:17 are retries)
+crontab  17 9,11,14 * * 1-5  runner.sh outreach   (daily; 11:17/14:17 are retries)
+         47 8-22/2 * * *     runner.sh inbox      (every 2h, every day)
   └── scripts/linkedin-codex-runner.sh      (copy lives at ~/agent-work/jobi on the Mini)
-        ├── skips if today already succeeded (~/.linkedin_codex_last_run),
-        │   another run holds /tmp/linkedin-codex-run.lock, or Chrome has the profile open
-        └── codex exec --profile linkedin  -C ~/Desktop/Work/job-email-bot/marketing/outreach
-              ├── skill:   ~/.codex/skills/linkedin (Scheduled Automation Mode)
-              ├── profile: ~/.codex/linkedin.config.toml  (approval never, sandbox writes
-              │            only the outreach folder, folder pre-trusted)
-              └── MCP:     linkedin-browser = @playwright/mcp@0.0.83, real Chrome,
-                           --user-data-dir ~/.linkedin-codex-profile
+        ├── skips if another run holds /tmp/linkedin-codex-run.lock or Chrome has the
+        │   profile open; outreach also skips once today succeeded (~/.linkedin_codex_last_run)
+        ├── codex exec --profile linkedin  -C ~/Work/job-email-bot/marketing/outreach
+        │     ├── skill:   ~/.codex/skills/linkedin (Scheduled Automation Mode + Inbox Auto-Reply)
+        │     ├── profile: ~/.codex/linkedin.config.toml  (approval never, sandbox writes
+        │     │            only the outreach folder, folder pre-trusted)
+        │     └── MCP:     linkedin-browser = @playwright/mcp@0.0.83, real Chrome,
+        │                  --user-data-dir ~/.linkedin-codex-profile
+        ├── run counts only if the summary ends RUN_STATUS=ok (exit 3 otherwise)
+        └── scripts/linkedin-notify.py: DMs Jiv on Discord for each new needs-jiv.jsonl
+            line, plus at most one failure/session-expired alert per day
 ```
 
 | What | Where (on the Mini) |
 |------|---------------------|
-| Tracker + run reports | `~/Desktop/Work/job-email-bot/marketing/outreach/` |
-| Runner logs + last summary | `~/Library/Logs/linkedin-codex/<date>.log`, `<date>-summary.md` |
+| Tracker + run reports | `~/Work/job-email-bot/marketing/outreach/` |
+| Escalations (DM'd once each) | `needs-jiv.jsonl` there; posted count in `~/.linkedin_needs_jiv_posted` |
+| Runner logs + per-run summary | `~/Library/Logs/linkedin-codex/<date>.log`, `<date>-<mode>-<HHMM>-summary.md` |
 | LinkedIn session | `~/.linkedin-codex-profile` (Chrome, Playwright mock keychain) |
+
+**Inbox auto-reply:** every run answers messages from the last 7 days when the full answer is in the allowed context and commits Jiv to nothing. Money, scheduling, offers, resume/document requests, personal chat, anything uncertain, and old work messages are **escalated**: a suggested reply is DM'd to Jiv on Discord (the Mini's "Crowdsnare Bot 2" DM channel) and nothing is sent. Rules live in the skill's `Inbox Auto-Reply` section. Test changes with `linkedin-codex-runner.sh inbox --dry-run` (writes `needs-jiv.dryrun.jsonl`, sends nothing).
 
 **Scheduled runs only send exact, already-drafted tracker rows.** New cold notes are drafted into the tracker and reported, never sent unattended (the skill's Scheduled Automation Mode). Approve or edit them, then an interactive `$linkedin` run or the next scheduled run sends them.
 
@@ -39,6 +46,9 @@ Sign in with email/password in the Chrome window that opens; it closes itself on
 - **Don't reuse `~/.playwright-linkedin-profile` on the Mini.** A long-running Claude Code Discord bot (tmux `work`) has its Playwright plugin pointed at it, so sharing it means profile-lock collisions.
 - **The global `~/.codex/config.toml` is never edited**: it runs the ChatGPT.app automations with full access. Everything LinkedIn-specific lives in the `linkedin` profile file, which `codex mcp list` without `--profile linkedin` doesn't show.
 - **`codex exec` denies MCP tools that aren't read-only** under `approval_policy = "never"` ("MCP tool call requires approval, but approval policy is never"): snapshot works, navigate/click/type don't. The `linkedin-browser` server sets `default_tools_approval_mode = "approve"` (scoped to that server only). Verified 2026-09-30: Codex loaded the feed logged in as Jiv, and a cron-launched headed Chrome found the session.
+- **`~/Desktop/Work` is a symlink to `~/Work`**, and Codex refuses writable roots with a symlink component ("symlinked writable roots are not supported"). Every path Codex writes to uses `~/Work/...`.
+- **`codex exec` exits 0 even when the run did nothing** (the first dry run couldn't write a file, gave up, and exited 0). Hence the `RUN_STATUS=ok` line the skill must print.
+- **The job-followup Discord token in `~/.job-followup-config.json` is dead (401)**, so its alerts fail silently. The notifier uses the live Claude Discord bot's token from `~/.claude/channels/discord/.env` instead.
 - **No `timeout` on macOS**: the runner caps a run at 45 min with `perl -e 'alarm ...'` (exit 142 = cap hit), then kills any Chrome left on the profile.
 - **Crontab survives reboots, but Chrome is headed**, so it needs the `admin` console session logged in. Auto-login is off on the Mini, so after a reboot, runs fail until someone logs in at the console.
 
