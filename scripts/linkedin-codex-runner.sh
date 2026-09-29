@@ -86,6 +86,16 @@ fi
 # Escalations first, whatever the exit code: a run can fail late after writing them.
 [ -z "$DRY_RUN" ] && python3 "$SCRIPT_DIR/linkedin-notify.py"
 
+# Jiv's hard rule: no em/en-dashes in anything Codex writes. The skill checks before
+# every send; this catches what slips through (those files hold sent + drafted text).
+DASHED=$(grep -l -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$OUTREACH_DIR/linkedin-outreach-tracker.json" \
+    "$OUTREACH_DIR/needs-jiv.jsonl" "$SUMMARY" 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')
+if [ -n "$DASHED" ] && [ -z "$DRY_RUN" ] && [ "$(cat "$HOME/.linkedin_dash_alerted" 2>/dev/null)" != "$TODAY" ]; then
+    echo "[$(date)] $MODE: em/en-dash found in: $DASHED"
+    python3 "$SCRIPT_DIR/linkedin-notify.py" --text "Codex wrote an em/en-dash in LinkedIn text on the Mini (in: $DASHED). Check ~/Work/job-email-bot/marketing/outreach." \
+        && echo "$TODAY" > "$HOME/.linkedin_dash_alerted"
+fi
+
 if grep -q "linkedin_session_expired" "$SUMMARY" 2>/dev/null; then
     alert_once "LinkedIn session on the Mini expired. Screen Share to vnc://100.98.219.58, then: cd ~/agent-work/jobi && PLAYWRIGHT_PROFILE=~/.linkedin-codex-profile LOGIN_TIMEOUT_MIN=20 npm run login"
 fi

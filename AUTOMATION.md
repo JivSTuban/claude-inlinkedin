@@ -30,7 +30,9 @@ crontab  17 9,11,14 * * 1-5  runner.sh outreach   (daily; 11:17/14:17 are retrie
 | Runner logs + per-run summary | `~/Library/Logs/linkedin-codex/<date>.log`, `<date>-<mode>-<HHMM>-summary.md` |
 | LinkedIn session | `~/.linkedin-codex-profile` (Chrome, Playwright mock keychain) |
 
-**Inbox auto-reply:** every run answers messages from the last 7 days when the full answer is in the allowed context and commits Jiv to nothing. Money, scheduling, offers, resume/document requests, personal chat, anything uncertain, and old work messages are **escalated**: a suggested reply is DM'd to Jiv on Discord (the Mini's "Crowdsnare Bot 2" DM channel) and nothing is sent. Rules live in the skill's `Inbox Auto-Reply` section. Test changes with `linkedin-codex-runner.sh inbox --dry-run` (writes `needs-jiv.dryrun.jsonl`, sends nothing).
+**Goal of every message: rapport**, a relationship that turns into opportunities later (the skill's "North Star"). Wording is up to Codex; **em/en-dashes never** (skill hard rule, checked before every send and audited by the runner, which DMs Jiv if one appears in the tracker, `needs-jiv.jsonl` or the run summary).
+
+**Inbox auto-reply:** every run answers messages from the last 30 days, friendly and casual chat included, as long as any fact about Jiv is in the allowed context and the reply commits him to nothing. Money, scheduling, offers, resume/document requests, sensitive topics, anything it can't make sense of, and work messages older than 30 days are **escalated**: a suggested reply is DM'd to Jiv on Discord (the Mini's "Crowdsnare Bot 2" DM channel) and nothing is sent. Rules live in the skill's `Inbox Auto-Reply` section. Test changes with `linkedin-codex-runner.sh inbox --dry-run` (writes `needs-jiv.dryrun.jsonl`, sends nothing).
 
 **Scheduled runs only send exact, already-drafted tracker rows.** New cold notes are drafted into the tracker and reported, never sent unattended (the skill's Scheduled Automation Mode). Approve or edit them, then an interactive `$linkedin` run or the next scheduled run sends them.
 
