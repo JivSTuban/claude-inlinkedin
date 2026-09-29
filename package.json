@@ -1,0 +1,14 @@
+{
+  "name": "claude-inlinkedin",
+  "scripts": {
+    "login": "node scripts/linkedin-ensure-login.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JivSTuban/claude-inlinkedin.git"
+  },
+  "private": true,
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

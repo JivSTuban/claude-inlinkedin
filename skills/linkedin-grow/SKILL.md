@@ -7,32 +7,52 @@ description: Use when asked to grow LinkedIn, connect with people on LinkedIn, e
 
 ## Overview
 
-Browser-driven LinkedIn growth session: send connection requests to suggested contacts, engage (like + comment) on relevant posts in your niche, and follow relevant accounts. Paced to stay under LinkedIn's bot-detection thresholds (~15-20 connections/day max).
+Browser-driven LinkedIn growth session: send connection requests to suggested contacts, engage (like + comment) on relevant posts in your niche, follow relevant accounts, and — at the end of every cycle — run a small, personalized **decision-maker outreach** phase that pitches Jiv for remote software work (Step 7). Paced to stay under LinkedIn's bot-detection thresholds (12–15 connection requests/day, ≤100/week).
 
 ---
 
-## YOUR PROFILE — edit this before using
+## YOUR PROFILE
 
 ```
-Name:     [YOUR FULL NAME]
-Title:    [YOUR HEADLINE, e.g. "AI Engineer | Full Stack Developer"]
-Location: [YOUR CITY, COUNTRY]
-Company:  [YOUR CURRENT COMPANY or "Independent"]
-Goal:     [e.g. "Remote opportunities, AI clients, dev network"]
-Niche:    [e.g. "AI Engineering, Full Stack, Automation"]
+Name:     Jiv Tuban
+Title:    Software Engineer — Full-Stack + AI/Automation
+Location: Cebu, Philippines (fully remote)
+Company:  Technical Lead @ Crowdsnare AI
+Goal:     Land remote software work — freelance/contract AND full-time.
+          Software engineering is the core offer; AI agents/RAG/automation is the edge.
+Niche:    Software development, full-stack (Next.js/TS, NestJS/FastAPI), AI agents,
+          RAG, workflow automation (Claude Code/MCP, n8n, Playwright)
 
-Voice for comments: [e.g. "Practical and technical, first-person experience, confident but not salesy"]
+Voice for comments: Practical and technical, first-person shipped experience,
+                    confident but not salesy. Specifics and numbers over adjectives.
 
-Target connections:
-  - [Role 1, e.g. AI Engineer]
-  - [Role 2, e.g. Engineering Manager]
-  - [Role 3, e.g. Tech Recruiter]
-  - [Role 4, e.g. CTO / Founder]
+Target connections (priority order for OUTREACH — see Step 7):
+  - Tech recruiters & staffing / dev-agency owners  ← highest reply rate, place remote devs
+  - Startup founders / CTOs at 5–50-person companies (only with a hireable-now signal)
+  - Engineering managers / heads of engineering
+  - Fellow senior/remote engineers (warm reciprocal network)
 
 Hashtags to engage:
-  - #[YourNiche1]
-  - #[YourNiche2]
-  - #[YourNiche3]
+  - #softwaredevelopment
+  - #AIengineering
+  - #remotework
+  - #buildinpublic
+
+PROOF POINTS (rotate 1 per outreach DM — pick the one closest to their domain):
+  - Speed-to-Lead AI agent → 11 vehicle sales, 90% booking conversion (Crowdsnare)
+  - DTG order-processing workflow → 85% manual-time cut, 500+ orders/day (Freckles)
+  - RAG chatbot → −40% latency, +57% retrieval recall (Ayahay)
+  - Full-stack portfolio automation → 119+ MLS listings, $13.5M value automated
+  - 1st place / 196 teams — GCash ImaGnation hackathon
+
+Stack one-liner: Next.js/TS · NestJS/FastAPI · Supabase/Postgres · GCP Cloud Run ·
+                 Claude Code/MCP · RAG · n8n · Playwright
+
+RATE POLICY (critical — read before any outreach):
+  - NEVER state a rate in a first message or connection note. Lead with a RESULT.
+  - Only discuss rate once they've replied and asked. Floor = $35–60/hr or a project fee.
+  - Do NOT anchor at $15–20/hr in writing — it caps every deal and reads junior to founders.
+  - Frame value as outcomes ("automations that pay for themselves"), not hours.
 ```
 
 ---
@@ -115,18 +135,90 @@ Scroll through — like posts from:
 - High-engagement posts in your niche (VP/Director level)
 - Posts that align with your target hashtags
 
+### 7. Decision-Maker Outreach (run LAST, every cycle)
+
+This is the money phase: quietly pitch Jiv for remote software work. It is a *feeder*, not a
+firehose — 2026 data says only ~2–3% of contacted people reply and founders reply at just
+~6.4%, so this phase wins on **relevance and personalization, not volume.** Keep it small,
+hand-curated, and logged. Never blast a template.
+
+#### 7a. Load outreach state (dedupe + cap enforcement)
+
+Read `~/.linkedin_outreach_log.jsonl` (create if missing). Each line:
+```json
+{"date":"2026-07-09","name":"...","url":"https://www.linkedin.com/in/...","segment":"recruiter|founder|eng-manager","stage":"note_sent|followed_up|replied|skip"}
+```
+From it, compute:
+- **contacted URLs** → never contact the same person twice
+- **this-week count** (rolling 7 days) of `note_sent` → must stay under the weekly cap below
+- **pending follow-ups** → anyone `note_sent` 2+ days ago who is now a 1st-degree connection and has NOT been `followed_up`
+
+#### 7b. Send follow-up DMs to people who accepted (do this before new notes)
+
+For each pending follow-up (max **10/day**): open the conversation and send the **Follow-up DM**
+(template below), rotating in the single proof point closest to their domain. Log `stage:"followed_up"`.
+If they already replied, DON'T send the template — draft a genuine 1:1 reply instead and log `stage:"replied"`.
+
+#### 7c. Send NEW personalized outreach notes (max 5/day, hard cap)
+
+These 5 come OUT OF the day's total connection-request budget (they are not extra). Source targets in
+this priority order and **only send if you can write a true one-line personalization** (a real detail from
+their profile/post/company). If you can't personalize it, skip it.
+
+1. **Recruiters / staffing / dev-agency owners** who place remote or offshore engineers
+   (search: `remote developer recruiter`, `staffing`, `software talent`, `dev agency founder`).
+   Highest reply audience (~19%). They broker gigs — pitch availability, not a hard sell.
+2. **Founders / CTOs at 5–50-person startups — ONLY with a hireable-now signal:**
+   - Recently funded (seed / Series A in last ~6 months)
+   - Actively posting 2+ engineering/AI roles right now
+   - Posting about shipping AI features, automation pain, or "we're hiring"
+   - Recent contractor churn
+   Skip any founder with no visible signal — they're drowning in pitches and won't reply.
+3. **Engineering managers / heads of eng** at remote-friendly companies actively hiring.
+
+Send the **Connection note** (≤300 chars, personalized hook required). Log `stage:"note_sent"`.
+
+#### Message templates (soft-ask first — a first message that pitches converts <2%)
+
+The goal of message 1 is a **reply, not a sale.** Lead with a specific, relevant hook. No rate. No wall of text.
+
+**Connection note** (with the request):
+> Hey {First} — {personalized hook: saw your post on X / noticed {company} is hiring a {role} / saw {company} just raised}. I'm a software engineer who ships full-stack + AI/automation (Claude/MCP agents, RAG, n8n). Would be great to connect.
+
+**Follow-up DM** (2+ days after they accept):
+> Thanks for connecting, {First}. Quick reason I reached out — {restate the signal, 1 line}. I recently {ONE proof point, e.g. "built a speed-to-lead AI agent that booked 11 vehicle sales at 90% conversion" / "shipped a RAG chatbot that cut latency 40%"}. If you're taking on remote software or AI/automation help, happy to show how I'd approach {their thing} — and if not, no worries, glad to be connected.
+
+**Recruiter/agency variant** (segment=recruiter) — availability, not a sale:
+> Thanks for connecting, {First}. I'm a full-stack + AI/automation engineer (Next.js/NestJS, Claude/MCP agents, RAG) opening up for remote work — contract or full-time. If you ever place engineers into remote/offshore roles, I'd love to be on your radar; happy to send a quick portfolio.
+
+**Rules:**
+- Personalize the hook every time — it's a ~4× lever. A templated blast lands at the 5–8% floor.
+- Lead with a RESULT, never a rate (see RATE POLICY in YOUR PROFILE).
+- Soft ask ("if you're taking on help…") beats a hard offer for the opener. Make the concrete offer only after a reply.
+- One proof point per DM, matched to their domain. Don't list all of them.
+- If a target's profile shows they're clearly not hiring and not a broker, skip and log `stage:"skip"` (still counts as "seen", won't be re-evaluated).
+
 ---
 
 ## Rate Limits (Stay Safe)
 
-| Action | Safe Daily Limit |
-|--------|-----------------|
-| Connection requests | 15-20 |
-| Likes | 50-100 |
-| Comments | 5-10 |
-| Follows | 20-30 |
+| Action | Safe Daily Limit | Weekly |
+|--------|-----------------|--------|
+| Connection requests (total) | **12–15** | **≤100** |
+| — of which outreach notes (Step 7c) | **≤5** | ≤25 |
+| Outreach follow-up DMs (Step 7b) | **≤10** | — |
+| Likes | 50–100 | — |
+| Comments | 5–10 | — |
+| Follows | 20–30 | — |
 
-Exceeding these triggers LinkedIn's automated restrictions. Space sessions across the day if running multiple times.
+Exceeding these triggers LinkedIn's automated restrictions (account can be locked 1–3 weeks).
+The ≤100/week connection cap is a **platform limit** — the log in Step 7a enforces it. Outreach
+notes are a *subset* of the daily connection budget, not extra. Space actions with randomized
+human-like delays; run only during business hours; skip a day occasionally.
+
+**Why local is safe:** this runs through your real Chrome profile on your own IP (Mac Mini), which
+LinkedIn treats as normal traffic. Do NOT migrate to a cloud tool (Expandi/HeyReach/Dripify) for
+"safety" — cloud/data-center sessions hit ~40% restriction rates in 2026. Local + low volume wins.
 
 ---
 

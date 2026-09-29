@@ -2,6 +2,45 @@
 
 Daily LinkedIn growth automation (connections, follows, post engagement) running on a local Mac via pm2 + Claude Code CLI.
 
+## Mac Mini + Codex (the live setup, since 2026-09-30)
+
+Outreach now runs on the always-on Mac Mini (`admin@100.98.219.58`, Tailscale) with **Codex CLI**, not Claude Code: Codex is authed from `~/.codex/auth.json` there, so headless runs work and cost nothing extra. The pm2 + `/linkedin-grow` path below is the older MacBook setup and is not scheduled anywhere.
+
+```
+crontab  17 9,11,14 * * 1-5   (Mini local time = PHT; 11:17 and 14:17 are retries)
+  └── scripts/linkedin-codex-runner.sh      (copy lives at ~/agent-work/jobi on the Mini)
+        ├── skips if today already succeeded (~/.linkedin_codex_last_run),
+        │   another run holds /tmp/linkedin-codex-run.lock, or Chrome has the profile open
+        └── codex exec --profile linkedin  -C ~/Desktop/Work/job-email-bot/marketing/outreach
+              ├── skill:   ~/.codex/skills/linkedin (Scheduled Automation Mode)
+              ├── profile: ~/.codex/linkedin.config.toml  (approval never, sandbox writes
+              │            only the outreach folder, folder pre-trusted)
+              └── MCP:     linkedin-browser = @playwright/mcp@0.0.83, real Chrome,
+                           --user-data-dir ~/.linkedin-codex-profile
+```
+
+| What | Where (on the Mini) |
+|------|---------------------|
+| Tracker + run reports | `~/Desktop/Work/job-email-bot/marketing/outreach/` |
+| Runner logs + last summary | `~/Library/Logs/linkedin-codex/<date>.log`, `<date>-summary.md` |
+| LinkedIn session | `~/.linkedin-codex-profile` (Chrome, Playwright mock keychain) |
+
+**Scheduled runs only send exact, already-drafted tracker rows.** New cold notes are drafted into the tracker and reported, never sent unattended (the skill's Scheduled Automation Mode). Approve or edit them, then an interactive `$linkedin` run or the next scheduled run sends them.
+
+**Log in / re-log in** (first time, or when a run reports `linkedin_session_expired`): Screen Share to `vnc://100.98.219.58`, then on the Mini:
+
+```bash
+cd ~/agent-work/jobi && PLAYWRIGHT_PROFILE=~/.linkedin-codex-profile LOGIN_TIMEOUT_MIN=20 npm run login
+```
+
+Sign in with email/password in the Chrome window that opens; it closes itself once the feed loads.
+
+**Mini-specific gotchas:**
+- **Don't reuse `~/.playwright-linkedin-profile` on the Mini.** A long-running Claude Code Discord bot (tmux `work`) has its Playwright plugin pointed at it, so sharing it means profile-lock collisions.
+- **The global `~/.codex/config.toml` is never edited**: it runs the ChatGPT.app automations with full access. Everything LinkedIn-specific lives in the `linkedin` profile file, which `codex mcp list` without `--profile linkedin` doesn't show.
+- **No `timeout` on macOS**: the runner caps a run at 45 min with `perl -e 'alarm ...'` (exit 142 = cap hit), then kills any Chrome left on the profile.
+- **Crontab survives reboots, but Chrome is headed**, so it needs the `admin` console session logged in. Auto-login is off on the Mini, so after a reboot, runs fail until someone logs in at the console.
+
 ## How It Works
 
 ```
@@ -15,6 +54,9 @@ pm2 cron (*/15 * * * *)
               └── Runs the /linkedin-grow Claude Code skill
                   Uses Playwright MCP with saved session
                   Sends connections, follows, comments
+                  Step 7: decision-maker outreach (personalized pitch DMs)
+                          reads/writes ~/.linkedin_outreach_log.jsonl for
+                          dedupe + rolling weekly-cap enforcement
 ```
 
 Runs once per day (8am+ guard), every 15 min polling window.
@@ -128,6 +170,7 @@ The 15-min cron means the script fires 96 times a day. Without a guard, it would
 | `scripts/linkedin-ensure-login.js` | Phase 1. Opens persistent Chrome profile, waits for LinkedIn login (up to 5 min). |
 | `~/.playwright-linkedin-profile/` | Persistent Playwright browser profile. LinkedIn cookies live here. |
 | `~/.linkedin_grow_last_run` | Timestamp file. Prevents duplicate runs on same day. |
+| `~/.linkedin_outreach_log.jsonl` | Outreach ledger. One line per contacted decision-maker (dedupe + rolling weekly-cap + follow-up tracking). Written by Step 7 of the skill. |
 | `~/.claude/skills/linkedin-grow/` | The Claude Code skill that drives the actual LinkedIn actions. |
 
 ---
