@@ -165,6 +165,8 @@ inbox_pass() {
 # Returns Codex's exit code (142 = cap, 5 = unresponsive); a login wall or empty scan never starts Codex.
 APPLY_DIR="$OUTREACH_DIR/.apply"
 APPLY_SKILL='No human is attached, so never ask a question: follow /Users/admin/.codex/skills/linkedin-apply/SKILL.md'
+# A hung Chrome in the scan or fill step must not hold the run lock forever (macOS has no `timeout`).
+capped() { perl -e 'alarm shift; exec @ARGV' "${LINKEDIN_STEP_SECONDS:-1500}" "$@"; }
 jobs_in() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$1" "${2:-jobs}" 2>/dev/null || echo 0; }
 apply_pass() {
     local sum="$1" rc n arc npend ids sum2 files
@@ -172,7 +174,7 @@ apply_pass() {
     local base=""; [ -n "${LINKEDIN_TEST_BASE:-}" ] && base="--base $LINKEDIN_TEST_BASE"
     files="--digest $APPLY_DIR/digest.json --profile $OUTREACH_DIR/apply-profile.json --bank $OUTREACH_DIR/apply-answer-bank.json --log $OUTREACH_DIR/apply-log.jsonl"
     rm -rf "$APPLY_DIR"; mkdir -p "$APPLY_DIR"
-    $APPLY_BIN scan --out "$APPLY_DIR/digest.json" --applied "$OUTREACH_DIR/apply-log.jsonl" $base
+    capped $APPLY_BIN scan --out "$APPLY_DIR/digest.json" --applied "$OUTREACH_DIR/apply-log.jsonl" $base
     rc=$?
     if [ $rc -eq 3 ]; then
         echo "Apply: LinkedIn showed a login wall, nothing scanned. RUN_STATUS=blocked:linkedin_session_expired" > "$sum"; return 0
@@ -191,7 +193,7 @@ apply_pass() {
     [ $rc -ne 0 ] && return $rc
     [ "$(status_of "$sum")" = "RUN_STATUS=ok" ] || return 0
     if [ ! -s "$APPLY_DIR/decisions.json" ]; then echo "RUN_STATUS=blocked:apply_no_decisions" >> "$sum"; return 0; fi
-    $APPLY_BIN apply $files --decisions "$APPLY_DIR/decisions.json" --pending "$APPLY_DIR/pending.json" $dry $base
+    capped $APPLY_BIN apply $files --decisions "$APPLY_DIR/decisions.json" --pending "$APPLY_DIR/pending.json" $dry $base
     arc=$?
     if [ $arc -eq 3 ]; then echo "RUN_STATUS=blocked:linkedin_session_expired" >> "$sum"; return 0; fi
     npend=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$APPLY_DIR/pending.json" 2>/dev/null || echo 0)
@@ -202,7 +204,7 @@ apply_pass() {
         [ $rc -ne 0 ] && return $rc
         if [ "$(status_of "$sum2")" = "RUN_STATUS=ok" ] && [ -s "$APPLY_DIR/answers.json" ]; then
             ids=$(python3 -c 'import json,sys; print(",".join(j["job_id"] for j in json.load(open(sys.argv[1]))))' "$APPLY_DIR/pending.json")
-            $APPLY_BIN apply $files --decisions "$APPLY_DIR/decisions.json" --only "$ids" --answers "$APPLY_DIR/answers.json" --pending "$APPLY_DIR/pending2.json" $dry $base
+            capped $APPLY_BIN apply $files --decisions "$APPLY_DIR/decisions.json" --only "$ids" --answers "$APPLY_DIR/answers.json" --pending "$APPLY_DIR/pending2.json" $dry $base
             arc=$?
             if [ $arc -eq 3 ]; then echo "RUN_STATUS=blocked:linkedin_session_expired" >> "$sum"; return 0; fi
         else
