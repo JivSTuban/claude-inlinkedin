@@ -48,11 +48,13 @@ chk 'grep -q "already succeeded today" "$LOGF"' "outreach: second success of the
 SHIMS="$ROOT/shims"; mkdir -p "$SHIMS"
 cat > "$SHIMS/codex-hang" <<SH
 #!/bin/bash
+[ "\$1" = --version ] && { echo codex-cli shim; exit 0; }
 bash -c "exec -a 'Google Chrome --user-data-dir=$PROFILE' sleep 300" &
 sleep 300
 SH
 cat > "$SHIMS/codex-limit" <<'SH'
 #!/bin/bash
+[ "$1" = --version ] && { echo codex-cli shim; exit 0; }
 touch "$(dirname "$0")/limit-called"
 echo "ERROR: You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at ${LIMIT_TIME:-11:59 PM}."
 exit 1
@@ -92,6 +94,23 @@ fresh limit-past
 LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" LIMIT_TIME="12:01 AM" run inbox
 UNTIL=$(cat "$T/.state/.linkedin_codex_blocked_until" 2>/dev/null || echo 0)
 chk '[ "$(date -r "$UNTIL" +%F)" = "$(date -v+1d +%F)" ]' "usage limit: a reset time already past means tomorrow"
+
+# 5b2. Codex that cannot answer --version (the 2026-09-30 brew 0.155.0 hang): fail in
+#      seconds with exit 5 and a named alert, never start the real run, never sit out the cap.
+cat > "$SHIMS/codex-dead" <<'SH'
+#!/bin/bash
+[ "$1" = --version ] && { touch "$(dirname "$0")/dead-version-called"; sleep 300; }
+touch "$(dirname "$0")/dead-run-called"
+SH
+chmod +x "$SHIMS/codex-dead"
+fresh dead; rm -f "$SHIMS"/dead-*-called
+START=$(date +%s)
+LINKEDIN_CODEX_BIN="$SHIMS/codex-dead" LINKEDIN_PREFLIGHT_SECONDS=3 LINKEDIN_MAX_SECONDS=600 run inbox; RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+pkill -f "sleep 300" 2>/dev/null
+chk '[ $RC -eq 5 ] && [ $ELAPSED -lt 30 ]' "dead codex: exit 5 in seconds, not the cap (got $RC after ${ELAPSED}s)"
+chk '[ -e "$SHIMS/dead-version-called" ] && [ ! -e "$SHIMS/dead-run-called" ]' "dead codex: preflight ran, the real run never started"
+chk '[ $(grep -c "notify dry\] LinkedIn inbox run on the Mini failed (exit 5, RUN_STATUS=blocked:codex_unresponsive" "$LOGF") -eq 1 ]' "dead codex: alert names codex_unresponsive"
 
 # 5c. inbox reader paths that must never spend quota: login wall and an empty inbox
 printf '#!/bin/bash\nexit 3\n' > "$SHIMS/inbox-wall"

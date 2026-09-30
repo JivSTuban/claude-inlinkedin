@@ -30,7 +30,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_DIR="${LINKEDIN_TEST_DIR:-}"
 PROFILE_DIR="$HOME/.linkedin-codex-profile"
 LOCK_DIR="/tmp/linkedin-codex-run.lock"
-CODEX="${LINKEDIN_CODEX_BIN:-codex}"
+# WHY not plain `codex`: PATH starts with /opt/homebrew/bin, which holds the brew cask
+# 0.155.0. After the Codex app self-updated on 2026-09-30 that binary hung on everything,
+# even `--version`, and both battle rounds sat out the whole 45 min cap with no output.
+# The app keeps ~/.codex/packages/standalone/current current, so prefer it.
+CODEX_STANDALONE="$HOME/.codex/packages/standalone/current/bin/codex"
+if [ -x "$CODEX_STANDALONE" ]; then CODEX_DEFAULT="$CODEX_STANDALONE"; else CODEX_DEFAULT=codex; fi
+CODEX="${LINKEDIN_CODEX_BIN:-$CODEX_DEFAULT}"
+PREFLIGHT_SECONDS="${LINKEDIN_PREFLIGHT_SECONDS:-20}"
 INBOX_BIN="${LINKEDIN_INBOX_BIN:-node $SCRIPT_DIR/linkedin-inbox.js}"
 MAX_SECONDS="${LINKEDIN_MAX_SECONDS:-2700}"   # 45 min cap; macOS has no `timeout`, so perl alarm below
 TODAY=$(date +%Y-%m-%d)
@@ -108,6 +115,12 @@ prefix() {   # DRY RUN / TEST MODE framing shared by every Codex prompt
     echo "$p"
 }
 run_codex() {   # run_codex <profile> <summary file> <prompt>
+    # Preflight: a Codex that cannot even print its version would burn the whole cap
+    # silently. Fail in seconds, return 5, and let the alert name the real cause.
+    if ! perl -e 'alarm shift; exec @ARGV' "$PREFLIGHT_SECONDS" "$CODEX" --version >/dev/null 2>&1 < /dev/null; then
+        echo "Codex ($CODEX) did not answer --version within ${PREFLIGHT_SECONDS}s, not starting a run. RUN_STATUS=blocked:codex_unresponsive" > "$2"
+        return 5
+    fi
     perl -e 'alarm shift; exec @ARGV' "$MAX_SECONDS" \
         "$CODEX" exec --profile "$1" --skip-git-repo-check -C "$OUTREACH_DIR" -o "$2" "$3" < /dev/null
 }
@@ -205,7 +218,7 @@ elif [ $EXIT_CODE -eq 0 ]; then
     [ "$MODE" = outreach ] && [ -z "$DRY_RUN" ] && echo "$TODAY" > "$STAMP_FILE"
     echo "[$(date)] $MODE: completed."
 else
-    echo "[$(date)] $MODE: failed with exit code $EXIT_CODE (142 = hit the ${MAX_SECONDS}s cap, 3 = RUN_STATUS not ok, 4 = usage limit)"
+    echo "[$(date)] $MODE: failed with exit code $EXIT_CODE (142 = hit the ${MAX_SECONDS}s cap, 3 = RUN_STATUS not ok, 4 = usage limit, 5 = Codex unresponsive)"
     alert_once "LinkedIn $MODE run on the Mini failed (exit $EXIT_CODE, ${RUN_STATUS:-no RUN_STATUS}). Log: $LOG"
 fi
 exit $EXIT_CODE
