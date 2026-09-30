@@ -123,6 +123,57 @@ fresh empty
 LINKEDIN_INBOX_BIN="$SHIMS/inbox-empty" LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" run inbox; RC=$?
 chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/limit-called" ]' "inbox: nothing awaiting a reply, Codex never started (got $RC)"
 
+# 5d. apply mode: scan -> Codex decides -> script fills -> Codex answers the rest -> script retries.
+#     Fakes stand in for linkedin-apply.js and Codex, so no quota and no real LinkedIn is touched.
+cat > "$SHIMS/apply-fake" <<'SH'
+#!/bin/bash
+D="$(dirname "$0")"; echo "$*" >> "$D/apply-calls"
+get() { local n="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$n" ] && { echo "$2"; return; }; shift; done; }
+case "$1" in
+  scan)
+    [ -n "${FAKE_WALL:-}" ] && exit 3
+    OUT=$(get --out "$@")
+    if [ -n "${FAKE_EMPTY:-}" ]; then echo '{"jobs":[]}' > "$OUT"
+    else echo '{"jobs":[{"n":1,"id":"111","title":"AI Engineer","company":"Acme","location":"Philippines (Remote)","jd":"x"}]}' > "$OUT"; fi ;;
+  apply)
+    PEND=$(get --pending "$@")
+    if echo "$*" | grep -q -- "--answers"; then echo '[]' > "$PEND"
+    else echo '[{"job_id":"111","company":"Acme","title":"AI Engineer","jd":"x","questions":[{"label":"Years with Okta?","kind":"text"}]}]' > "$PEND"; fi ;;
+esac
+exit 0
+SH
+cat > "$SHIMS/codex-apply" <<'SH'
+#!/bin/bash
+D="$(dirname "$0")"
+[ "$1" = --version ] && { echo codex-cli shim; exit 0; }
+C=""; O=""; PROMPT="${@: -1}"; A=("$@")
+for i in "${!A[@]}"; do [ "${A[$i]}" = "-C" ] && C="${A[$((i+1))]}"; [ "${A[$i]}" = "-o" ] && O="${A[$((i+1))]}"; done
+case "$PROMPT" in
+  *"APPLY DECIDE"*) touch "$D/decide-called"; echo '[{"id":"111","apply":true,"fit":85,"reason":"fits"}]' > "$C/.apply/decisions.json" ;;
+  *"APPLY ANSWER"*) touch "$D/answer-called"; echo '[{"job_id":"111","label":"Years with Okta?","answer":"0","reusable":true}]' > "$C/.apply/answers.json" ;;
+esac
+echo "done. RUN_STATUS=ok" > "$O"
+SH
+chmod +x "$SHIMS/apply-fake" "$SHIMS/codex-apply"
+mkapply() { echo '{"first_name":"T"}' > "$T/apply-profile.json"; rm -f "$SHIMS"/apply-calls "$SHIMS"/decide-called "$SHIMS"/answer-called; }
+fresh apply-ok; mkapply
+LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply; RC=$?
+chk '[ $RC -eq 0 ] && [ -e "$SHIMS/decide-called" ] && [ -e "$SHIMS/answer-called" ]' "apply: decide pass and answer pass both ran, exit 0 (got $RC)"
+chk '[ "$(grep -c "^scan" "$SHIMS/apply-calls")" = 1 ] && [ "$(grep -c "^apply" "$SHIMS/apply-calls")" = 2 ] && grep "^apply" "$SHIMS/apply-calls" | tail -1 | grep -q -- "--only 111 .*--answers\|--answers .*--only 111\|--only 111"' "apply: one scan, first fill, then a retry limited to the pending job"
+chk 'grep -q "\-\-answers" "$SHIMS/apply-calls" && ! grep "^apply" "$SHIMS/apply-calls" | head -1 | grep -q -- "--answers"' "apply: answers only reach the retry, not the first fill"
+fresh apply-dry; mkapply
+LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply --dry-run >/dev/null; 
+chk '[ "$(grep "^apply" "$SHIMS/apply-calls" | grep -c -- "--dry-run")" = 2 ]' "apply: --dry-run reaches every fill call (nothing can be submitted)"
+fresh apply-wall; mkapply
+FAKE_WALL=1 LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply; RC=$?
+chk '[ $RC -eq 3 ] && [ ! -e "$SHIMS/decide-called" ] && grep -q "notify dry\] LinkedIn session on the Mini expired" "$LOGF"' "apply: login wall exits 3, alerts, never starts Codex (got $RC)"
+fresh apply-empty; mkapply
+FAKE_EMPTY=1 LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply; RC=$?
+chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/decide-called" ]' "apply: nothing new to apply to, Codex never started (got $RC)"
+fresh apply-noprofile; mkapply; rm -f "$T/apply-profile.json"
+LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply; RC=$?
+chk '[ $RC -eq 3 ] && [ ! -e "$SHIMS/decide-called" ] && grep -q "apply_profile_missing" "$LOGF"' "apply: missing apply-profile.json blocks before Codex (got $RC)"
+
 # 6. notifier: each escalation once, malformed line survives, state advances
 fresh notify; Q="$T/q.jsonl"; S="$T/state"
 n() { LINKEDIN_NOTIFY_QUEUE="$Q" LINKEDIN_NOTIFY_STATE="$S" LINKEDIN_NOTIFY_DRY=1 python3 "$NOTIFY" | grep -c "notify dry"; }

@@ -1,0 +1,21 @@
+# Codex profile: `linkedin-apply` - the Easy Apply decide + answer passes, NO browser.
+# Install on the Mac Mini as ~/.codex/linkedin-apply.config.toml. Launched by
+# scripts/linkedin-codex-runner.sh as `codex exec --profile linkedin-apply ...`.
+# scripts/linkedin-apply.js scans jobs into .apply/digest.json and fills the forms from the
+# decisions and answers Codex writes to .apply/*.json, so Codex only reads files and decides.
+# WHY: Codex browsing LinkedIn via the Playwright MCP cost ~3M tokens a run and ran the
+# ChatGPT plan out of quota on 2026-09-30. No mcp_servers here on purpose.
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+model_reasoning_effort = "medium"
+
+[sandbox_workspace_write]
+# REAL path, not ~/Desktop/Work (a symlink; Codex rejects symlinked writable roots).
+writable_roots = [
+  "/Users/admin/Work/job-email-bot/marketing/outreach",
+]
+network_access = false
+
+[projects."/Users/admin/Work/job-email-bot/marketing/outreach"]
+trust_level = "trusted"

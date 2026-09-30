@@ -2,7 +2,9 @@
 # Mac Mini crontab entry point for the Codex `$linkedin` runs.
 #   linkedin-codex-runner.sh outreach   daily: inbox replies, follow-ups, pre-drafted sends, new drafts
 #   linkedin-codex-runner.sh inbox      every 2h: inbox auto-replies + escalations only
-#   add --dry-run to either: decide everything, send nothing (writes needs-jiv.dryrun.jsonl)
+#   linkedin-codex-runner.sh apply      LinkedIn Easy Apply: scan, Codex decides fit, script fills + submits,
+#                                       one Codex pass answers what the script could not derive
+#   add --dry-run to any: decide everything, send nothing (apply mode fills every form but stops at Review)
 # The inbox pass never lets Codex touch the browser: scripts/linkedin-inbox.js reads the
 # inbox into a small digest, Codex (profile `linkedin-inbox`, no browser MCP) decides and
 # writes the replies to a file, then linkedin-inbox.js sends and verifies them. Codex
@@ -39,6 +41,7 @@ if [ -x "$CODEX_STANDALONE" ]; then CODEX_DEFAULT="$CODEX_STANDALONE"; else CODE
 CODEX="${LINKEDIN_CODEX_BIN:-$CODEX_DEFAULT}"
 PREFLIGHT_SECONDS="${LINKEDIN_PREFLIGHT_SECONDS:-20}"
 INBOX_BIN="${LINKEDIN_INBOX_BIN:-node $SCRIPT_DIR/linkedin-inbox.js}"
+APPLY_BIN="${LINKEDIN_APPLY_BIN:-node $SCRIPT_DIR/linkedin-apply.js}"
 MAX_SECONDS="${LINKEDIN_MAX_SECONDS:-2700}"   # 45 min cap; macOS has no `timeout`, so perl alarm below
 TODAY=$(date +%Y-%m-%d)
 
@@ -61,7 +64,7 @@ DASH_ALERT_FILE="$STATE_DIR/.linkedin_dash_alerted"
 BLOCKED_FILE="$STATE_DIR/.linkedin_codex_blocked_until"   # epoch; set when ChatGPT quota runs out
 LOG="$LOG_DIR/$TODAY.log"
 
-case "$MODE" in outreach|inbox) ;; *) echo "usage: $0 outreach|inbox [--dry-run]" >&2; exit 2 ;; esac
+case "$MODE" in outreach|inbox|apply) ;; *) echo "usage: $0 outreach|inbox|apply [--dry-run]" >&2; exit 2 ;; esac
 
 mkdir -p "$LOG_DIR" "$STATE_DIR"
 exec >>"$LOG" 2>&1
@@ -157,8 +160,64 @@ inbox_pass() {
     return 0
 }
 
+# Apply pass: linkedin-apply.js scans and fills, Codex (profile `linkedin-apply`, NO browser)
+# only decides fit and answers what the script could not derive from apply-profile.json.
+# Returns Codex's exit code (142 = cap, 5 = unresponsive); a login wall or empty scan never starts Codex.
+APPLY_DIR="$OUTREACH_DIR/.apply"
+APPLY_SKILL='No human is attached, so never ask a question: follow /Users/admin/.codex/skills/linkedin-apply/SKILL.md'
+jobs_in() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$1" "${2:-jobs}" 2>/dev/null || echo 0; }
+apply_pass() {
+    local sum="$1" rc n arc npend ids sum2 files
+    local dry=""; [ -n "$DRY_RUN" ] && dry="--dry-run"
+    local base=""; [ -n "${LINKEDIN_TEST_BASE:-}" ] && base="--base $LINKEDIN_TEST_BASE"
+    files="--digest $APPLY_DIR/digest.json --profile $OUTREACH_DIR/apply-profile.json --bank $OUTREACH_DIR/apply-answer-bank.json --log $OUTREACH_DIR/apply-log.jsonl"
+    rm -rf "$APPLY_DIR"; mkdir -p "$APPLY_DIR"
+    $APPLY_BIN scan --out "$APPLY_DIR/digest.json" --applied "$OUTREACH_DIR/apply-log.jsonl" $base
+    rc=$?
+    if [ $rc -eq 3 ]; then
+        echo "Apply: LinkedIn showed a login wall, nothing scanned. RUN_STATUS=blocked:linkedin_session_expired" > "$sum"; return 0
+    elif [ $rc -ne 0 ] || [ ! -s "$APPLY_DIR/digest.json" ]; then
+        echo "Apply: scan failed (exit $rc). RUN_STATUS=blocked:apply_scan_failed" > "$sum"; return 0
+    fi
+    n=$(jobs_in "$APPLY_DIR/digest.json")
+    if [ "$n" = 0 ]; then
+        echo "Apply: no new eligible jobs, Codex not started. RUN_STATUS=ok" > "$sum"; return 0
+    fi
+    if [ ! -s "$OUTREACH_DIR/apply-profile.json" ]; then
+        echo "Apply: $OUTREACH_DIR/apply-profile.json is missing. RUN_STATUS=blocked:apply_profile_missing" > "$sum"; return 0
+    fi
+    run_codex linkedin-apply "$sum" "$(prefix "APPLY DECIDE run of the linkedin-apply skill. $APPLY_SKILL, section APPLY DECIDE. Inputs: $APPLY_DIR/digest.json ($n jobs), $OUTREACH_DIR/apply-profile.json, $OUTREACH_DIR/apply-resume.md. Write $APPLY_DIR/decisions.json and stop. You have no browser; never open LinkedIn.")"
+    rc=$?
+    [ $rc -ne 0 ] && return $rc
+    [ "$(status_of "$sum")" = "RUN_STATUS=ok" ] || return 0
+    if [ ! -s "$APPLY_DIR/decisions.json" ]; then echo "RUN_STATUS=blocked:apply_no_decisions" >> "$sum"; return 0; fi
+    $APPLY_BIN apply $files --decisions "$APPLY_DIR/decisions.json" --pending "$APPLY_DIR/pending.json" $dry $base
+    arc=$?
+    if [ $arc -eq 3 ]; then echo "RUN_STATUS=blocked:linkedin_session_expired" >> "$sum"; return 0; fi
+    npend=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$APPLY_DIR/pending.json" 2>/dev/null || echo 0)
+    if [ "$npend" -gt 0 ]; then
+        sum2="${sum%-summary.md}-answers-summary.md"
+        run_codex linkedin-apply "$sum2" "$(prefix "APPLY ANSWER run of the linkedin-apply skill. $APPLY_SKILL, section APPLY ANSWER. Inputs: $APPLY_DIR/pending.json ($npend jobs), $OUTREACH_DIR/apply-profile.json, $OUTREACH_DIR/apply-resume.md. Write $APPLY_DIR/answers.json and stop. You have no browser; never open LinkedIn.")"
+        rc=$?
+        [ $rc -ne 0 ] && return $rc
+        if [ "$(status_of "$sum2")" = "RUN_STATUS=ok" ] && [ -s "$APPLY_DIR/answers.json" ]; then
+            ids=$(python3 -c 'import json,sys; print(",".join(j["job_id"] for j in json.load(open(sys.argv[1]))))' "$APPLY_DIR/pending.json")
+            $APPLY_BIN apply $files --decisions "$APPLY_DIR/decisions.json" --only "$ids" --answers "$APPLY_DIR/answers.json" --pending "$APPLY_DIR/pending2.json" $dry $base
+            arc=$?
+            if [ $arc -eq 3 ]; then echo "RUN_STATUS=blocked:linkedin_session_expired" >> "$sum"; return 0; fi
+        else
+            echo "Apply: answer pass wrote nothing usable; those jobs stay unanswered for now." >> "$sum"
+        fi
+    fi
+    [ $arc -eq 4 ] && echo "RUN_STATUS=blocked:apply_failed (see apply-log.jsonl)" >> "$sum"
+    return 0
+}
+
 if [ "$MODE" = inbox ]; then
     inbox_pass "$SUMMARY"
+    EXIT_CODE=$?
+elif [ "$MODE" = apply ]; then
+    apply_pass "$SUMMARY"
     EXIT_CODE=$?
 else
     INBOX_SUMMARY="${SUMMARY%-summary.md}-inbox-summary.md"

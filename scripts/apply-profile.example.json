@@ -1,0 +1,29 @@
+{
+  "_note": "Copy to ~/Work/job-email-bot/marketing/outreach/apply-profile.json on the Mini and fill in real values. The real file holds a phone number, so it never goes in this public repo. Every number below is a placeholder to review, because these answers are typed into real applications under Jiv's name.",
+  "first_name": "First",
+  "last_name": "Last",
+  "email": "you@example.com",
+  "phone": "9000000000",
+  "phone_country": "Philippines (+63)",
+  "city": "City, Region, Philippines",
+  "country": "Philippines",
+  "linkedin": "https://www.linkedin.com/in/your-handle",
+  "github": "https://github.com/your-handle",
+  "portfolio": "https://example.com",
+  "english_level": "Professional",
+  "years_overall": 2,
+  "years": { "react": 2, "typescript": 2, "python": 2, "n8n": 1 },
+  "notice_days": 0,
+  "salary_usd_monthly": 3000,
+  "salary_usd_annual": 36000,
+  "salary_usd_hourly": 18,
+  "salary_php_monthly": 150000,
+  "preferences": {
+    "home_office_with_stable_internet": true,
+    "background_check_ok": true,
+    "full_time_ok": true,
+    "contract_ok": true,
+    "night_shift_ok": null,
+    "relocation_ok": false
+  }
+}
