@@ -150,6 +150,7 @@ async function scan() {
       for (const kw of KEYWORDS) {
         const url = `${BASE}/jobs/search/?keywords=${encodeURIComponent(kw)}&${seed.loc}&f_TPR=r${windowSec}&f_WT=2&f_AL=true&sortBy=DD`;
         const found = await scanCards(page, url);
+        if (found !== null) log(`scan ${seed.name} "${kw}": ${found.length} cards`);
         if (found === null) {
           digest.session_expired = true;
           fs.writeFileSync(out, JSON.stringify(digest, null, 1));
@@ -166,9 +167,17 @@ async function scan() {
       && !seen.pairs.has((j.company + '|' + j.title).toLowerCase())
       && ELIGIBLE_LOC.test(j.location) && !TITLE_NOISE.test(j.title));
     digest.stats = { cards, unique: all.length, eligible_location: all.filter((j) => ELIGIBLE_LOC.test(j.location)).length, after_filters: keep.length };
-    // Newest first, and PH-geo seed before worldwide: those are the ones we can actually take.
+    // PH-geo seed before worldwide: those are the ones we can actually take.
     keep.sort((a, b) => (a.seed === b.seed ? 0 : a.seed === 'ph' ? -1 : 1));
-    for (const j of keep) {
+    // The same role is often posted once per city (Manila, Cebu, ...). One application per company+title.
+    const roleSeen = new Set();
+    const uniq = keep.filter((j) => {
+      const k = (j.company + '|' + j.title).toLowerCase();
+      if (roleSeen.has(k)) return false;
+      roleSeen.add(k);
+      return true;
+    });
+    for (const j of uniq) {
       if (digest.jobs.length >= max) break;
       try {
         const d = await jobDetail(page, j.id);
@@ -477,9 +486,17 @@ async function apply() {
   let failed = 0;
   let rc = 0;
   try {
+    const handled = new Set(); // company+title already applied to in this run (same role, another city)
     for (const job of jobs) {
+      const role = (job.company + '|' + job.title).toLowerCase();
+      if (handled.has(role)) {
+        log(`duplicate_role: ${job.company} | ${job.title}`);
+        record({ jobId: job.id, company: job.company, title: job.title, status: 'duplicate_role', dry_run: DRY || undefined });
+        continue;
+      }
       let r;
       try { r = await applyJob(page, job, { P, bank, answers }); } catch (e) { r = { status: 'error', reason: String(e.message || e).slice(0, 200) }; }
+      if (['submitted', 'dry_run_ok'].includes(r.status)) handled.add(role);
       await discardModal(page).catch(() => {});
       const fit = want.get(job.id)?.fit;
       log(`${r.status}: ${job.company} | ${job.title}${r.reason ? ' (' + r.reason + ')' : ''}${r.pending ? ` (${r.pending.length} unanswered)` : ''}`);

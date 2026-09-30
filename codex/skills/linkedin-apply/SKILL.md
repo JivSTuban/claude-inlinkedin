@@ -41,10 +41,10 @@ Output: `.apply/answers.json`, a JSON array of `{"job_id": "...", "label": "<the
 - `kind` `select` or `radio`: `answer` must be exactly one of `options`.
 - Numeric questions (years, counts, ratings, pay): `answer` is digits only. Years: answer the real number from the resume, `0` if Jiv has never used it. A "from 1 to 10 how comfortable" rating: only rate topics the resume supports, otherwise `null`.
 - Pay with no unit or currency: use the JD's posted currency and period. No posted pay: use `apply-profile.json` (`salary_usd_monthly`, `salary_usd_annual`, `salary_usd_hourly`, `salary_php_monthly`) in the unit the question implies. Unclear unit: `null`.
-- Yes/No about experience: `Yes` only when the resume shows it, `No` when it clearly does not, `null` when unsure.
+- Yes/No about experience: `Yes` only when the resume shows it, `No` when it clearly does not, `null` when unsure. A "such as A, B, C" list counts only when one of the named tools, or the exact category, is in the resume. Adjacent experience is not a Yes (GoHighLevel or a CRM assistant is not "ticketing or service-desk tools"); the resume's "NOT in this resume" list is authoritative.
 - Preferences (`apply-profile.json` `preferences`): answer from them. A preference that is missing or `null` means `null`. Never guess shifts, relocation, travel, background checks or start dates.
 - Free text (`multiline` true): 2 to 4 plain sentences tailored to THIS job, naming one or two real wins from the resume with their numbers, matched to a named requirement in the JD. No templates, no flattery, no dashes.
-- `reusable: true` only for facts that are identical on every application (for example years with Active Directory). Anything tied to this job's pay, JD or company is `false`.
+- `reusable: true` only for numeric years and clear `No`/`0` facts that are identical on every application (for example years with Active Directory). A `Yes`, a preference, or anything tied to this job's pay, JD or company is `false`.
 - If ANY question for a job must be `null`, still write the others; the script skips the job on the first `null`.
 
 ## Dry run and test runs

@@ -71,6 +71,25 @@ Sign in with email/password in the Chrome window that opens; it closes itself on
 - **No `timeout` on macOS**: the runner caps a run at 45 min with `perl -e 'alarm ...'` (exit 142 = cap hit), then kills any Chrome left on the profile.
 - **Crontab survives reboots, but Chrome is headed**, so it needs the `admin` console session logged in. Auto-login is off on the Mini, so after a reboot, runs fail until someone logs in at the console.
 
+### Easy Apply on the Mini (`linkedin-codex-runner.sh apply`, added 2026-10-01)
+
+Same split as the inbox pass: **the script does all the page work, Codex (profile `linkedin-apply`, no browser) only decides.**
+
+```
+scan (linkedin-apply.js)  ->  Codex: APPLY DECIDE  ->  fill (script)  ->  Codex: APPLY ANSWER (only if needed)  ->  fill again (script)
+```
+
+- **scan**: 8 keywords x 2 seeds (Philippines geo `103121230` first, Worldwide `92000000`), last 24h, remote, Easy Apply only. Keeps cards whose location says Philippines/APAC/worldwide, drops already-applied ids, one application per company+title (the same role is often posted once per city), then reads each JD into `.apply/digest.json`. The Philippines geo seed is what fixes the old "0 in scope" problem: LinkedIn "Remote" under Worldwide is almost always country-locked.
+- **decide**: Codex scores fit and writes `.apply/decisions.json`. It skips roles needing 4+ years, .NET/AWS ops, or fixed night shifts. Apply only at fit 70+.
+- **fill**: the script walks every modal page and fills every field it can answer from rules (`apply-profile.json`: links, phone, English level, work authorization for the Philippines only, years per technology, EEO = decline) or the learned `apply-answer-bank.json`. Anything else is collected in `.apply/pending.json`. Answers that match no option or are not a number in a numeric box are rejected, not typed.
+- **answer**: one Codex call answers the pending questions from `apply-resume.md` + the facts. **Any `null` skips the job** (a null is the honest answer, not a failure). Jobs that stay unanswered get one retry next run, then are final.
+- **Dry run**: `linkedin-codex-runner.sh apply --dry-run` does everything except Submit: every form is filled through to the Review page and discarded.
+- **Files** (all in `~/Work/job-email-bot/marketing/outreach/`, none in this public repo): `apply-profile.json` (copy `scripts/apply-profile.example.json`; holds the phone number), `apply-resume.md`, `apply-answer-bank.json`, `apply-log.jsonl`, `.apply/`. Codex skill: `codex/skills/linkedin-apply/SKILL.md` (install to `~/.codex/skills/linkedin-apply/`), profile `codex/linkedin-apply.config.toml` (install to `~/.codex/`).
+- **Cron**: not scheduled. Suggested line, parked until a live run is supervised: `27 9,13,17 * * * /Users/admin/agent-work/jobi/scripts/linkedin-codex-runner.sh apply`.
+- **Cost measured 2026-10-01**: decide ~27K tokens, answer ~20K tokens, scan ~11 min wall time (16 searches + 12 JD pages).
+- **Real-LinkedIn facts** (2026-10-01): the modal's Next button is now named just `Next` (older notes say "Continue to next step"); pages are Contact info (prefilled) -> Resume (your resume is remembered) -> Additional Questions -> Review; a blocked Next shows "This field is required" / "Invalid input" and the page does not advance; numeric boxes reject words; `navigator.webdriver` must be false or Submit silently does nothing (the Playwright launch here already sets that).
+- The old MacBook skill `~/.claude/skills/linkedin-apply` (Claude-driven, interactive) still exists and is unchanged.
+
 ## How It Works
 
 ```
