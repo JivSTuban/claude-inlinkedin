@@ -206,13 +206,25 @@ async function send() {
           failed++;
           return 3;
         }
-        const box = page.locator(COMPOSER).first();
-        await box.waitFor({ timeout: 15000 });
-        await box.click();
-        if ((await box.evaluate((el) => el.tagName)) === 'TEXTAREA') await box.fill(a.text);
-        else await page.keyboard.insertText(a.text);
-        await page.waitForTimeout(600);
+        // LinkedIn sometimes re-renders the composer right after the click and drops the text
+        // (Farrukh's thread, 2026-10-05: Send stayed disabled). Type again, replacing anything
+        // already there, until Send is enabled; only then is it safe to click.
         const btn = page.locator(SEND_BTN).first();
+        let typed = false;
+        for (let attempt = 1; attempt <= 3 && !typed; attempt++) {
+          const box = page.locator(COMPOSER).first();
+          await box.waitFor({ timeout: 15000 });
+          await box.click();
+          if ((await box.evaluate((el) => el.tagName)) === 'TEXTAREA') await box.fill(a.text);
+          else {
+            await page.keyboard.press('ControlOrMeta+a');
+            await page.keyboard.insertText(a.text);
+          }
+          await page.waitForTimeout(800);
+          typed = (await btn.count()) ? await btn.isEnabled().catch(() => false) : true;
+          if (!typed) await page.waitForTimeout(1500);
+        }
+        if (!typed) throw new Error('Send stayed disabled after 3 typing attempts');
         if (await btn.count()) await btn.click({ timeout: 10000 });
         else await page.getByRole('button', { name: /^Send$/ }).first().click({ timeout: 10000 });
         await page.waitForTimeout(3000);
