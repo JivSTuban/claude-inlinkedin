@@ -95,6 +95,30 @@ LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" LIMIT_TIME="12:01 AM" run inbox
 UNTIL=$(cat "$T/.state/.linkedin_codex_blocked_until" 2>/dev/null || echo 0)
 chk '[ "$(date -r "$UNTIL" +%F)" = "$(date -v+1d +%F)" ]' "usage limit: a reset time already past means tomorrow"
 
+# 5b1. Transient Codex failure ("Selected model is at capacity", exit 1): retried, and the
+#      run succeeds once Codex recovers; a Codex that never recovers still fails after the tries.
+cat > "$SHIMS/codex-flaky" <<'SH'
+#!/bin/bash
+D="$(dirname "$0")"
+[ "$1" = --version ] && { echo codex-cli shim; exit 0; }
+echo x >> "$D/flaky-calls"
+if [ "$(wc -l < "$D/flaky-calls")" -le "${FLAKY_FAILS:-1}" ]; then
+  echo "ERROR: Selected model is at capacity. Please try a different model."; exit 1
+fi
+O=""; A=("$@"); for i in "${!A[@]}"; do [ "${A[$i]}" = "-o" ] && O="${A[$((i+1))]}"; done
+echo "done. RUN_STATUS=ok" > "$O"
+SH
+chmod +x "$SHIMS/codex-flaky"
+fresh flaky; rm -f "$SHIMS/flaky-calls"
+FLAKY_FAILS=2 LINKEDIN_CODEX_RETRY_SLEEP=1 LINKEDIN_CODEX_BIN="$SHIMS/codex-flaky" run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ "$(wc -l < "$SHIMS/flaky-calls")" -eq 3 ]' "flaky codex: two capacity errors, third try succeeds, exit 0 (got $RC after $(wc -l < "$SHIMS/flaky-calls") calls)"
+fresh flaky-dead; rm -f "$SHIMS/flaky-calls"
+FLAKY_FAILS=99 LINKEDIN_CODEX_RETRY_SLEEP=1 LINKEDIN_CODEX_BIN="$SHIMS/codex-flaky" run inbox; RC=$?
+chk '[ $RC -ne 0 ] && [ "$(wc -l < "$SHIMS/flaky-calls")" -eq 3 ]' "flaky codex: gives up after 3 tries instead of looping (got $RC)"
+rm -f "$SHIMS/limit-called"
+fresh limit-noretry; LINKEDIN_CODEX_RETRY_SLEEP=1 LINKEDIN_CODEX_BIN="$SHIMS/codex-limit" run inbox >/dev/null
+chk '[ "$(grep -c "retrying after backoff" "$LOGF")" = 0 ]' "usage limit: is never retried"
+
 # 5b2. Codex that cannot answer --version (the 2026-09-30 brew 0.155.0 hang): fail in
 #      seconds with exit 5 and a named alert, never start the real run, never sit out the cap.
 cat > "$SHIMS/codex-dead" <<'SH'

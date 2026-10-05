@@ -124,8 +124,23 @@ run_codex() {   # run_codex <profile> <summary file> <prompt>
         echo "Codex ($CODEX) did not answer --version within ${PREFLIGHT_SECONDS}s, not starting a run. RUN_STATUS=blocked:codex_unresponsive" > "$2"
         return 5
     fi
-    perl -e 'alarm shift; exec @ARGV' "$MAX_SECONDS" \
-        "$CODEX" exec --profile "$1" --skip-git-repo-check -C "$OUTREACH_DIR" -o "$2" "$3" < /dev/null
+    # Exit 1 is a transient API refusal ("Selected model is at capacity", 2026-10-05 14:47
+    # lost a whole run to it), so retry with backoff. The cap (142), usage limit (4) and
+    # unresponsive Codex (5) are not transient and are never retried.
+    local rc attempt=1
+    while :; do
+        perl -e 'alarm shift; exec @ARGV' "$MAX_SECONDS" \
+            "$CODEX" exec --profile "$1" --skip-git-repo-check -C "$OUTREACH_DIR" -o "$2" "$3" < /dev/null
+        rc=$?
+        if [ $rc -eq 1 ] && [ $attempt -lt "${LINKEDIN_CODEX_TRIES:-3}" ] \
+            && ! tail -c +$((LOG_START + 1)) "$LOG" | grep -q 'hit your usage limit'; then
+            echo "[$(date)] $MODE: Codex exited 1 (attempt $attempt), retrying after backoff"
+            sleep $((attempt * ${LINKEDIN_CODEX_RETRY_SLEEP:-120}))
+            attempt=$((attempt + 1))
+            continue
+        fi
+        return $rc
+    done
 }
 # codex exec exits 0 even when the run couldn't do its job (the first dry run did
 # exactly that), so every pass must end with RUN_STATUS=ok for the run to count.

@@ -120,8 +120,21 @@ async function read() {
         digest.last_message_from_you.push(name);
         continue;
       }
-      const link = item.locator('a').first();
-      await ((await link.count()) ? link : item).click({ timeout: 10000 });
+      // The first <a> in a row can be the avatar (href /in/...), which navigates to the
+      // profile and times out waiting for that navigation: that failed the whole run on
+      // 2026-10-02 and 2026-10-05. Prefer the thread link, and never let one stuck row
+      // sink the rest of the inbox.
+      const threadLink = item.locator('a[href*="/messaging/thread/"]').first();
+      const anyLink = item.locator('a').first();
+      const target = (await threadLink.count()) ? threadLink : (await anyLink.count()) ? anyLink : item;
+      try {
+        await target.click({ timeout: 10000, noWaitAfter: true });
+      } catch (e) {
+        digest.read_errors = (digest.read_errors || 0) + 1;
+        log(`row ${i} (${name}) click failed: ${String(e.message).split('\n')[0]}`);
+        if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
+        continue;
+      }
       await page.waitForURL(/\/messaging\/thread\//, { timeout: 15000 }).catch(() => {});
       await page.waitForTimeout(1800);
       const url = page.url().split('?')[0];

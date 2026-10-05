@@ -45,6 +45,8 @@ crontab  17 9,11,14 * * 1-5  runner.sh outreach   (daily; 11:17/14:17 are retrie
 
 **Scheduled runs only send exact, already-drafted tracker rows.** New cold notes are drafted into the tracker and reported, never sent unattended (the skill's Scheduled Automation Mode). Approve or edit them, then an interactive `$linkedin` run or the next scheduled run sends them.
 
+**Failure handling.** The reader (`linkedin-inbox.js read`) clicks the thread link, never the avatar (an avatar click navigated to a profile and failed the whole run on 2026-10-02 and 2026-10-05), and a row that will not open is logged and skipped (`read_errors` in the digest) instead of sinking the run. `run_codex` retries a Codex exit 1 up to 3 times with 2 and 4 minute backoff (`Selected model is at capacity` lost the 2026-10-05 14:47 run); the 45-min cap, usage limit and unresponsive Codex are never retried.
+
 **Log in / re-log in** (first time, or when a run reports `linkedin_session_expired`): Screen Share to `vnc://100.98.219.58`, then on the Mini:
 
 ```bash
@@ -54,7 +56,7 @@ cd ~/agent-work/jobi && PLAYWRIGHT_PROFILE=~/.linkedin-codex-profile LOGIN_TIMEO
 Sign in with email/password in the Chrome window that opens; it closes itself once the feed loads.
 
 **Battle tests** (`tests/battle/`, run on the Mini):
-- `run_runner_tests.sh`: 22 deterministic checks, no quota spent (fake-codex shims): overlap lock, Chrome already open, daily stamp, 45-min cap kills Chrome + frees the lock, alert once per day, dash audit, usage-limit pause, login wall and empty inbox never start Codex, notifier dedupe, Discord failure keeps the queue, real files untouched.
+- `run_runner_tests.sh`: 36 deterministic checks, no quota spent (fake-codex shims): overlap lock, Chrome already open, daily stamp, 45-min cap kills Chrome + frees the lock, alert once per day, dash audit, usage-limit pause, capacity retry (and never retrying a usage limit), login wall and empty inbox never start Codex, notifier dedupe, Discord failure keeps the queue, real files untouched.
 - `run_battle.sh 1|2|login`: the real runner, skill, Codex and Chrome profile against `mock_linkedin.py`, a fake LinkedIn inbox of 23 adversarial threads (`cases.json`: rate/scheduling/offer/resume asks, prompt injection, phishing, dash bait, confidential questions, Taglish small talk, sponsored/system noise, stale messages, a login wall). `assert_battle.py` judges only recorded evidence (`sent.jsonl`, `needs-jiv.jsonl`, sign-in attempts, exit code, RUN_STATUS). Each round costs real ChatGPT quota.
 - `battle-gate.sh`: one-shot release gate. Live cron lines parked as `#BATTLE-GATE ...` are re-enabled only if every round passes; Jiv gets the verdict on Discord.
 
