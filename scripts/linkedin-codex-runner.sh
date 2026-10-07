@@ -151,7 +151,7 @@ status_of() { grep -o 'RUN_STATUS=[^[:space:]`]*' "$1" 2>/dev/null | tail -1; }
 inbox_pass() {
     local sum="$1" rc n
     rm -rf "$INBOX_DIR"; mkdir -p "$INBOX_DIR"
-    $INBOX_BIN read --out "$INBOX_DIR/digest.json" ${LINKEDIN_TEST_BASE:+--base "$LINKEDIN_TEST_BASE"}
+    $INBOX_BIN read --out "$INBOX_DIR/digest.json" --sent-log "$OUTREACH_DIR/inbox-sent.jsonl" ${LINKEDIN_TEST_BASE:+--base "$LINKEDIN_TEST_BASE"}
     rc=$?
     if [ $rc -eq 3 ]; then
         echo "Inbox: LinkedIn showed a login wall, nothing read. RUN_STATUS=blocked:linkedin_session_expired" > "$sum"; return 0

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Deterministic LinkedIn inbox I/O for the Mac Mini Codex runs.
 //
-//   node scripts/linkedin-inbox.js read --out <digest.json> [--base URL] [--max 15] [--scan 30]
+//   node scripts/linkedin-inbox.js read --out <digest.json> [--sent-log inbox-sent.jsonl] [--base URL] [--max 15] [--scan 30]
 //   node scripts/linkedin-inbox.js send --actions <actions.json> --digest <digest.json> --log <sent.jsonl> [--base URL]
 //
 // WHY: letting Codex drive the browser cost ~3M tokens per inbox run (36 tool calls, 27-43K
@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
+const gate = require('./linkedin-inbox-gate');
 
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PROFILE = process.env.LINKEDIN_PROFILE || path.join(process.env.HOME, '.linkedin-codex-profile');
@@ -94,7 +95,12 @@ async function read() {
   const scan = Number(opt('scan', 30));
   const ctx = await launch();
   const page = ctx.pages()[0] || (await ctx.newPage());
-  const digest = { generated_at: new Date().toISOString(), base: BASE, session_expired: false, threads: [], last_message_from_you: [] };
+  const digest = { generated_at: new Date().toISOString(), base: BASE, session_expired: false, threads: [], last_message_from_you: [], conversation_ended: [] };
+  // What the bot already sent per thread: the gate stops a chat the bot has volleyed enough.
+  const sentLog = opt('sent-log');
+  const sentRows = sentLog && fs.existsSync(sentLog)
+    ? fs.readFileSync(sentLog, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)
+    : [];
   try {
     if (!(await openInbox(page))) {
       digest.session_expired = true;
@@ -149,11 +155,20 @@ async function read() {
         if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
         continue;
       }
-      digest.threads.push({ n: digest.threads.length + 1, name, thread_url: url, last_sender: sender, list_preview: preview.slice(0, 300), conversation: text.slice(-2500) });
+      // Their last message asks nothing (thanks, ok, a thumbs-up, goodbye): the conversation is
+      // over, so Codex never sees it and nothing is sent.
+      const g = gate.assess({ conversation: text, name, threadUrl: url, sentRows });
+      if (g.ended) {
+        digest.conversation_ended.push({ name, why: g.why });
+        log(`ended: ${name} (${g.why})`);
+        if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
+        continue;
+      }
+      digest.threads.push({ n: digest.threads.length + 1, name, thread_url: url, last_sender: sender, list_preview: preview.slice(0, 300), bot_replies_7d: g.bot_replies, bot_cap_reached: g.bot_cap_reached, conversation: text.slice(-2500) });
       if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
     }
     fs.writeFileSync(out, JSON.stringify(digest, null, 1));
-    log(`read ${digest.threads.length} threads awaiting a reply, ${digest.last_message_from_you.length} where Jiv spoke last`);
+    log(`read ${digest.threads.length} threads awaiting a reply, ${digest.last_message_from_you.length} where Jiv spoke last, ${digest.conversation_ended.length} ended`);
     return 0;
   } finally {
     await ctx.close().catch(() => {});
