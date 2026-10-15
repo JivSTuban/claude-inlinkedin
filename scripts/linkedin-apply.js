@@ -5,6 +5,7 @@
 //                                        [--dm <inbox-digest.json> [--dm-only] [--needs-jiv <needs-jiv.jsonl>] [--dry-run]]
 //        --dm        also queue the job links people sent in DMs (inbox reader's job_leads), ahead of search
 //        --dm-only   those links only, no keyword search; exits without Chrome when none is new
+//        --skip-external   leave off-LinkedIn links to linkedin-email.py (it emails or tells Jiv)
 //   node scripts/linkedin-apply.js apply --digest <digest.json> --decisions <decisions.json> --profile <apply-profile.json>
 //                                        --bank <answer-bank.json> --pending <pending.json> --log <apply-log.jsonl> [--dry-run]
 //
@@ -197,7 +198,8 @@ async function scan() {
   const leads = dmLeads(opt('dm'));
   const dmNew = leads.ids.filter((l) => !seen.ids.has(l.id)).slice(0, DM_MAX);
   const byThread = new Map(); // one DM per person, however many links they sent
-  for (const e of leads.external) byThread.set(e.thread_url, { lead: e, urls: [...(byThread.get(e.thread_url)?.urls || []), e.url] });
+  // linkedin-email.py owns off-LinkedIn links when the runner passes --skip-external (email-apply, else tells Jiv itself).
+  for (const e of flag('skip-external') ? [] : leads.external) byThread.set(e.thread_url, { lead: e, urls: [...(byThread.get(e.thread_url)?.urls || []), e.url] });
   for (const { lead, urls } of byThread.values()) tellJiv(opt('needs-jiv'), lead, urls, 'Job link off LinkedIn. The runner only applies through LinkedIn Easy Apply, so this one is yours.');
   const dmOnly = flag('dm-only');
   if (dmOnly && !dmNew.length) {

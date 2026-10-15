@@ -112,6 +112,30 @@ inbox read (linkedin-inbox.js)  ->  digest.json job_leads  ->  scan --dm --dm-on
 - **Cost**: no links, no extra work. With links: one decide pass (~27K tokens) plus, only if questions are unanswered, one answer pass.
 - **Dry run**: `linkedin-codex-runner.sh inbox --dry-run` fills the forms to Review and records nothing.
 - **Tests**: `tests/battle/test_job_links.js` (extractor), `run_runner_tests.sh` section 5e (the chained pass).
+### Email-apply for off-LinkedIn job links (added 2026-10-15)
+
+A job link people DM that is not on LinkedIn (a careers page with `Email careers@...`) is now applied to by email from Jiv's Gmail. Chosen by Jiv 2026-10-15: auto-send with hard caps.
+
+```
+inbox read -> digest.json job_leads.external -> linkedin-email.py scan -> Codex: EMAIL APPLY (no browser, no mail) -> linkedin-email.py send (Gmail SMTP)
+```
+
+- **Scan** (`scripts/linkedin-email.py scan`): fetches each page (public hosts only, redirects re-checked; loopback, private and tailnet addresses are refused because the URLs come from DMs). A page counts as email-apply only when it publishes a `mailto:` on its OWN domain and has no application form. Everything else (forms, JS-only pages, a mailto on another domain) goes to `needs-jiv.jsonl`, one Discord DM per person.
+- **Decide**: Codex gets the page text (untrusted data), `apply-profile.json`, `apply-resume.md`; writes `.email/drafts.json` (`apply`, `fit`, `subject`, `body`). Skill section `EMAIL APPLY` in `codex/skills/linkedin-apply/SKILL.md`.
+- **Send**: SMTP SSL to `smtp.gmail.com:465` with the Gmail app password in `~/.job-followup-config.json` (only `email` and `app_password` are read), resume attached from `apply-resume.pdf`. Gmail still accepts app passwords on personal accounts in 2026.
+- **Why the guard rails** (the old `job-followup.py` bot was switched off 2026-07-18 for repeated outbound emails; that kill file `job-email-bot.disabled` is a separate switch and stays):
+  - the recipient is the address read off the page, never anything Codex wrote;
+  - one email per recipient and per posting, ever (`email-apply-log.jsonl` is the memory; the Origami application sent by hand on 2026-10-15 is seeded in it);
+  - max 5 sent per day (`LINKEDIN_EMAIL_DAILY_CAP`);
+  - subject and body must have no em or en dash, no phone number, and only Jiv's own three links;
+  - every send is DMed to Jiv on Discord afterwards;
+  - `fit` must be 70 or more, and a posting that asks for money, an ID or a password is `apply: false`.
+- **Kill switch**: `touch ~/Work/job-email-bot/marketing/outreach/email-apply.disabled` stops all sending on the next run (scans and Codex still run, nothing is mailed). Delete the file to resume.
+- **Dry run**: `linkedin-codex-runner.sh inbox --dry-run` scans and decides, logs `dry_run_ok`, sends nothing, and dry rows never count against dedupe or the cap.
+- **Files** (outreach folder): `email-apply-log.jsonl`, `apply-resume.pdf`, `.email/`.
+- **Tests**: `tests/battle/test_email_apply.py` (19: page classification, SSRF, redirects, draft validation, caps, dedupe, kill switch, fake SMTP) and `run_runner_tests.sh` section 5f.
+- **Found only by running it on the real links**: `OpenerDirector.open()` has no `context` argument, so every fetch failed until the opener was built with an `HTTPSHandler(context=...)`. A patched-`fetch` unit test could not see it; `RealFetch` in the tests now runs the real code against a local server.
+
 - **Real job-page facts** (2026-10-15, found by dry-running the DM path on live jobs): no `<h1>` (title and company come from `document.title`, "Title | Company | LinkedIn"); an applied job shows an "Application status" block instead of Easy Apply; a taken-down job says "Unable to load the page"; location is the first `a · b ago · N applicants` line.
 - **Real Easy Apply radio markup** (same day): question text is the radio's `aria-label` (and a `<p>` before the fieldset), the `<label for>` is empty and is the click target, option text sits in an ancestor, and the ids are React `useId` values that change after a click. The filler now finds radios by position and verifies they stayed checked. Before this fix, any job with Yes/No questions asked Codex about `radio-group-_r_f_` and could never be answered.
 - **Real markup** (2026-10-15): there is no `.msg-s-message-group`; messages are `.msg-s-event-listitem`, the other person's carry `--other`. Thread rows have no `a[href*="/messaging/thread/"]` right now, so the reader falls back to the first anchor.

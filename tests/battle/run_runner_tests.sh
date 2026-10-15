@@ -175,6 +175,7 @@ for i in "${!A[@]}"; do [ "${A[$i]}" = "-C" ] && C="${A[$((i+1))]}"; [ "${A[$i]}
 case "$PROMPT" in
   *"APPLY DECIDE"*) touch "$D/decide-called"; echo '[{"id":"111","apply":true,"fit":85,"reason":"fits"}]' > "$C/.apply/decisions.json" ;;
   *"APPLY ANSWER"*) touch "$D/answer-called"; echo '[{"job_id":"111","label":"Years with Okta?","answer":"0","reusable":true}]' > "$C/.apply/answers.json" ;;
+  *"EMAIL APPLY"*) touch "$D/email-decide-called"; mkdir -p "$C/.email"; echo '[{"id":"1","apply":true,"fit":85,"reason":"fits","subject":"AI Engineer application","body":"Hi"}]' > "$C/.email/drafts.json" ;;
 esac
 echo "done. RUN_STATUS=ok" > "$O"
 SH
@@ -216,6 +217,43 @@ chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/apply-calls" ] && [ ! -e "$SHIMS/decide-cal
 fresh dm-fail; mkapply
 FAKE_WALL=1 LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox; RC=$?
 chk '[ $RC -eq 3 ] && grep -q "linkedin_session_expired" "$LOGF"' "dm apply: a login wall in the DM scan fails the run, not silently ok (got $RC)"
+
+# 5f. job links off LinkedIn: email-apply pass (fake Gmail script + fake Codex, nothing is sent).
+printf '#!/bin/bash\n[ "$1" = read ] && echo %s > "$3"\nexit 0\n' "'{\"threads\":[],\"job_leads\":[{\"name\":\"Ana\",\"thread_url\":\"u\",\"linkedin_job_ids\":[],\"external\":[\"https://acme.example/careers\"]}]}'" > "$SHIMS/inbox-ext"
+cat > "$SHIMS/email-fake" <<'SH'
+#!/bin/bash
+D="$(dirname "$0")"; echo "$*" >> "$D/email-calls"
+get() { local n="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$n" ] && { echo "$2"; return; }; shift; done; }
+case "$1" in
+  scan)
+    OUT=$(get --out "$@")
+    if [ -n "${FAKE_EMPTY:-}" ]; then echo '{"candidates":[]}' > "$OUT"
+    else echo '{"candidates":[{"id":"1","url":"https://acme.example/careers","to":"hr@acme.example","title":"AI Engineer","jd":"x"}]}' > "$OUT"; fi ;;
+  send) exit "${FAKE_SEND_RC:-0}" ;;
+esac
+exit 0
+SH
+chmod +x "$SHIMS/inbox-ext" "$SHIMS/email-fake"
+emailenv() { LINKEDIN_INBOX_BIN="$SHIMS/inbox-ext" LINKEDIN_EMAIL_BIN="$SHIMS/email-fake" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" "$@"; }
+mkemail() { mkapply; rm -f "$SHIMS"/email-calls "$SHIMS"/email-decide-called; }
+fresh email-apply; mkemail
+emailenv run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ -e "$SHIMS/email-decide-called" ]' "email apply: an off-LinkedIn link starts the email pass and Codex decides (got $RC)"
+chk 'grep "^send" "$SHIMS/email-calls" | grep -q -- "--disabled-file .*email-apply.disabled" && grep "^send" "$SHIMS/email-calls" | grep -q -- "--resume .*apply-resume.pdf"' "email apply: send gets the kill-switch file and the resume"
+chk '[ ! -e "$SHIMS/apply-calls" ]' "email apply: no LinkedIn job ids, Easy Apply scan never starts"
+fresh email-dry; mkemail
+emailenv run inbox --dry-run >/dev/null
+chk '[ "$(grep -c -- "--dry-run" "$SHIMS/email-calls")" = 2 ]' "email apply: --dry-run reaches the scan and the send"
+fresh email-none; mkemail
+FAKE_EMPTY=1 emailenv run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/email-decide-called" ] && ! grep -q "^send" "$SHIMS/email-calls"' "email apply: no email-apply postings, Codex never started, nothing sent (got $RC)"
+fresh email-fail; mkemail
+FAKE_SEND_RC=4 emailenv run inbox; RC=$?
+chk '[ $RC -eq 3 ] && grep -q "email_send_issue" "$T/.logs/$TODAY"-inbox-*-summary.md' "email apply: a failed send fails the run, not silently ok (got $RC)"
+# Easy Apply scan must leave off-LinkedIn links to the email pass
+fresh dm-skip-external; mkapply
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox >/dev/null
+chk 'grep "^scan" "$SHIMS/apply-calls" | head -1 | grep -q -- "--skip-external"' "dm apply: Easy Apply scan passes --skip-external (the email pass owns off-site links)"
 
 # 6. notifier: each escalation once, malformed line survives, state advances
 fresh notify; Q="$T/q.jsonl"; S="$T/state"

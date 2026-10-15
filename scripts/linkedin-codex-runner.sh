@@ -22,6 +22,7 @@
 #   LINKEDIN_CODEX_BIN  stand-in for `codex` (tests exercise the cap and usage-limit paths
 #                       without spending ChatGPT quota)
 #   LINKEDIN_INBOX_BIN  stand-in for `node scripts/linkedin-inbox.js` (same reason: no Chrome)
+#   LINKEDIN_EMAIL_BIN  stand-in for `python3 scripts/linkedin-email.py` (same reason: no Gmail)
 
 set -u
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -42,6 +43,7 @@ CODEX="${LINKEDIN_CODEX_BIN:-$CODEX_DEFAULT}"
 PREFLIGHT_SECONDS="${LINKEDIN_PREFLIGHT_SECONDS:-20}"
 INBOX_BIN="${LINKEDIN_INBOX_BIN:-node $SCRIPT_DIR/linkedin-inbox.js}"
 APPLY_BIN="${LINKEDIN_APPLY_BIN:-node $SCRIPT_DIR/linkedin-apply.js}"
+EMAIL_BIN="${LINKEDIN_EMAIL_BIN:-python3 $SCRIPT_DIR/linkedin-email.py}"
 MAX_SECONDS="${LINKEDIN_MAX_SECONDS:-2700}"   # 45 min cap; macOS has no `timeout`, so perl alarm below
 TODAY=$(date +%Y-%m-%d)
 
@@ -192,7 +194,7 @@ apply_pass() {
     scan_args="--applied $OUTREACH_DIR/apply-log.jsonl"
     # dm: only the job links the inbox reader found this run (no keyword search). Links that are
     # not Easy Apply go to needs-jiv.jsonl; a dry run records nothing and tells nobody.
-    [ "$kind" = dm ] && scan_args="$scan_args --dm $INBOX_DIR/digest.json --dm-only --needs-jiv $OUTREACH_DIR/needs-jiv.jsonl $dry"
+    [ "$kind" = dm ] && scan_args="$scan_args --dm $INBOX_DIR/digest.json --dm-only --skip-external --needs-jiv $OUTREACH_DIR/needs-jiv.jsonl $dry"
     capped $APPLY_BIN scan --out "$APPLY_DIR/digest.json" $scan_args $base
     rc=$?
     if [ $rc -eq 3 ]; then
@@ -234,15 +236,58 @@ apply_pass() {
     return 0
 }
 
+# Email-apply pass: job links people DMed that are NOT on LinkedIn. linkedin-email.py fetches each
+# page and keeps only postings that publish a mailto on their own domain (the rest go to
+# needs-jiv.jsonl); Codex (profile `linkedin-apply`, no browser, no mail) decides fit and writes the
+# email; linkedin-email.py validates and sends from Gmail under hard caps. A kill-switch file stops it.
+EMAIL_DIR="$OUTREACH_DIR/.email"
+email_apply_pass() {
+    local sum="$1" rc n arc
+    local dry=""; [ -n "$DRY_RUN" ] && dry="--dry-run"
+    local elog="$OUTREACH_DIR/email-apply-log.jsonl"
+    rm -rf "$EMAIL_DIR"; mkdir -p "$EMAIL_DIR"
+    capped $EMAIL_BIN scan --digest "$INBOX_DIR/digest.json" --out "$EMAIL_DIR/candidates.json" --log "$elog" --needs-jiv "$OUTREACH_DIR/needs-jiv.jsonl" $dry
+    rc=$?
+    if [ $rc -ne 0 ] || [ ! -s "$EMAIL_DIR/candidates.json" ]; then
+        echo "Email apply: scan failed (exit $rc). RUN_STATUS=blocked:email_scan_failed" > "$sum"; return 0
+    fi
+    n=$(jobs_in "$EMAIL_DIR/candidates.json" candidates)
+    if [ "$n" = 0 ]; then
+        echo "Email apply: no email-apply postings, Codex not started. RUN_STATUS=ok" > "$sum"; return 0
+    fi
+    if [ ! -s "$OUTREACH_DIR/apply-profile.json" ]; then
+        echo "Email apply: $OUTREACH_DIR/apply-profile.json is missing. RUN_STATUS=blocked:apply_profile_missing" > "$sum"; return 0
+    fi
+    run_codex linkedin-apply "$sum" "$(prefix "EMAIL APPLY run of the linkedin-apply skill. $APPLY_SKILL, section EMAIL APPLY. Inputs: $EMAIL_DIR/candidates.json ($n postings), $OUTREACH_DIR/apply-profile.json, $OUTREACH_DIR/apply-resume.md. Write $EMAIL_DIR/drafts.json and stop. You have no browser and no mail access; the runner sends.")"
+    rc=$?
+    [ $rc -ne 0 ] && return $rc
+    [ "$(status_of "$sum")" = "RUN_STATUS=ok" ] || return 0
+    if [ ! -s "$EMAIL_DIR/drafts.json" ]; then echo "RUN_STATUS=blocked:email_no_drafts" >> "$sum"; return 0; fi
+    capped $EMAIL_BIN send --candidates "$EMAIL_DIR/candidates.json" --drafts "$EMAIL_DIR/drafts.json" --log "$elog" \
+        --resume "$OUTREACH_DIR/apply-resume.pdf" --disabled-file "$OUTREACH_DIR/email-apply.disabled" $dry
+    arc=$?
+    [ $arc -ne 0 ] && echo "RUN_STATUS=blocked:email_send_issue (see email-apply-log.jsonl)" >> "$sum"
+    return 0
+}
+
 # Inbox pass = replies, then apply to the job links people sent. The reader puts every link
 # it saw into digest.json (job_leads), so one Chrome read serves both. No links, no second pass.
 inbox_pass() {
-    local sum="$1" rc dsum st nleads
+    local sum="$1" rc dsum esum st counts nli next
     inbox_replies_pass "$sum"
     rc=$?
     [ $rc -ne 0 ] && return $rc
-    nleads=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(l.get("linkedin_job_ids",[]))+len(l.get("external",[])) for l in d.get("job_leads",[])))' "$INBOX_DIR/digest.json" 2>/dev/null || echo 0)
-    [ "${nleads:-0}" = 0 ] && return 0
+    counts=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); L=d.get("job_leads",[]); print(sum(len(l.get("linkedin_job_ids",[])) for l in L), sum(len(l.get("external",[])) for l in L))' "$INBOX_DIR/digest.json" 2>/dev/null || echo "0 0")
+    nli=${counts% *}; next=${counts#* }
+    if [ "${next:-0}" != 0 ]; then
+        esum="${sum%-summary.md}-emailapply-summary.md"
+        email_apply_pass "$esum"
+        rc=$?
+        [ $rc -ne 0 ] && return $rc
+        st=$(status_of "$esum")
+        [ "$st" = "RUN_STATUS=ok" ] || echo "${st:-RUN_STATUS=missing} (email apply pass)" >> "$sum"
+    fi
+    [ "${nli:-0}" = 0 ] && return 0
     dsum="${sum%-summary.md}-dmapply-summary.md"
     apply_pass "$dsum" dm
     rc=$?
