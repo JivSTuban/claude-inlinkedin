@@ -112,6 +112,19 @@ inbox read (linkedin-inbox.js)  ->  digest.json job_leads  ->  scan --dm --dm-on
 - **Cost**: no links, no extra work. With links: one decide pass (~27K tokens) plus, only if questions are unanswered, one answer pass.
 - **Dry run**: `linkedin-codex-runner.sh inbox --dry-run` fills the forms to Review and records nothing.
 - **Tests**: `tests/battle/test_job_links.js` (extractor), `run_runner_tests.sh` section 5e (the chained pass).
+### OnlineJobs login (`scripts/onlinejobs-ensure-login.js`, added 2026-10-15)
+
+The OnlineJobs automation signs itself in, so the session never has to be restored by hand. `npm run onlinejobs:login` runs it; the inbox and apply scripts call `ensureLoggedIn(page)` from it.
+
+- **Normal run types nothing.** A persistent Chrome profile (`~/.onlinejobs-profile`, `ONLINEJOBS_PROFILE`) keeps the cookie, the script opens `/message`, and if it is not bounced to `/login` it exits 0 as `already`.
+- **Expired session:** it signs in once with the saved credentials and verifies by loading `/message` again.
+- **Credentials, first hit wins:** env `ONLINEJOBS_EMAIL`/`ONLINEJOBS_PASSWORD`, then `~/.onlinejobs.env` (the Mini, chmod 600), then Keychain service `claude-onlinejobs` (the MacBook). The password is never printed or screenshotted.
+- **It cannot lock the account:** one attempt per run, at most 2 per hour (`~/.onlinejobs-login-state.json`); a rejected password sets a 6 hour cooldown and is never retried before it ends; a captcha, a verification code or a changed form exits 3 for a human.
+- **Exit codes:** 0 logged in, 3 needs a human, 5 credentials missing or rejected, 6 throttled.
+- **Session cookies:** if OnlineJobs issues a session-only cookie (no expiry), Chrome drops it on close and every run signs in again; that is the case this script exists for, and the 2 per hour cap still applies, so run the apply passes in one browser session.
+- **Tests:** `tests/battle/test_onlinejobs_login.js` (11, against a local mock login server with fake credentials: already logged in posts nothing, good login, wrong password cools down and never retries, missing credentials, captcha, throttle).
+- **Not verified against the real site.** The agent does not sign in to the real account itself, by Jiv's rule; the first real run is Jiv's (`npm run onlinejobs:login`). The label and button names (`Email Address`, `Password`, `Log in`) come from the live login page's accessibility snapshot.
+
 ### Email-apply for off-LinkedIn job links (added 2026-10-15)
 
 A job link people DM that is not on LinkedIn (a careers page with `Email careers@...`) is now applied to by email from Jiv's Gmail. Chosen by Jiv 2026-10-15: auto-send with hard caps.

@@ -1,7 +1,8 @@
 {
   "name": "claude-inlinkedin",
   "scripts": {
-    "login": "node scripts/linkedin-ensure-login.js"
+    "login": "node scripts/linkedin-ensure-login.js",
+    "onlinejobs:login": "node scripts/onlinejobs-ensure-login.js"
   },
   "repository": {
     "type": "git",
