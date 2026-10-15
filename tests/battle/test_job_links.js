@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Deterministic tests for scripts/linkedin-job-links.js. No browser, no Codex, no quota.
 const assert = require('assert');
-const { extract, urlsInText } = require('../../scripts/linkedin-job-links');
+const { extract, urlsInText, parseJobTitle, parseJobLocation } = require('../../scripts/linkedin-job-links');
 
 let fails = 0;
 const t = (name, fn) => {
@@ -52,6 +52,24 @@ t('junk input does not throw', () => {
 t('text fallback finds urls in plain thread text', () => {
   const urls = urlsInText('Hey! Check this https://www.linkedin.com/jobs/view/4012345678/ it fits you.');
   assert.deepStrictEqual(extract(urls).linkedin_job_ids, ['4012345678']);
+});
+
+// Strings captured from live job pages on 2026-10-15.
+t('job page title splits into title and company', () => {
+  assert.deepStrictEqual(parseJobTitle('Senior Platform Engineer - On-Prem & Bare-Metal (Philippines/Malaysia) | X-Team | LinkedIn'),
+    { title: 'Senior Platform Engineer - On-Prem & Bare-Metal (Philippines/Malaysia)', company: 'X-Team' });
+});
+t('a title that contains a pipe keeps it', () => {
+  assert.deepStrictEqual(parseJobTitle('AI Automation Specialist (n8n) | Marketing & Creative | HGS OSS | LinkedIn'),
+    { title: 'AI Automation Specialist (n8n) | Marketing & Creative', company: 'HGS OSS' });
+});
+t('a removed job page ("Jobs | LinkedIn") has no title or company', () => {
+  assert.deepStrictEqual(parseJobTitle('Jobs | LinkedIn'), { title: '', company: '' });
+});
+t('location line is the first dotted line with an age or applicant count', () => {
+  const lines = ['X-Team', 'Senior Platform Engineer', 'Philippines · 1 week ago · 49 applicants', 'Remote'];
+  assert.strictEqual(parseJobLocation(lines), 'Philippines · 1 week ago · 49 applicants');
+  assert.strictEqual(parseJobLocation(['no', 'dots here']), '');
 });
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');

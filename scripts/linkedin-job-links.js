@@ -76,4 +76,22 @@ function extract(urls) {
 /** Plain-text fallback (mock markup has no anchors): every http(s) token in the text. */
 const urlsInText = (text) => (String(text || '').match(/https?:\/\/[^\s<>"']+/g) || []);
 
-module.exports = { extract, urlsInText, linkedinJobId, MIN_JOB_ID_DIGITS };
+/**
+ * Title + company from a job page's document.title, "<Title> | <Company> | LinkedIn".
+ * The page has no <h1> (verified on live job pages 2026-10-15). A title may itself contain
+ * " | ", so company is the LAST segment before "LinkedIn". Returns {title, company}, '' if unparsable.
+ */
+function parseJobTitle(docTitle) {
+  const parts = String(docTitle || '').split(' | ').map((x) => x.trim());
+  if (parts.length < 3 || !/^linkedin$/i.test(parts[parts.length - 1])) return { title: '', company: '' };
+  const company = parts[parts.length - 2];
+  return { title: parts.slice(0, -2).join(' | '), company };
+}
+
+/** "Philippines · 1 week ago · 49 applicants" style line from the top of a job page, or ''. */
+function parseJobLocation(lines) {
+  const hit = (lines || []).slice(0, 10).find((l) => /·/.test(l) && /(ago|applicants?|reposted)/i.test(l));
+  return hit ? hit.slice(0, 160) : '';
+}
+
+module.exports = { extract, urlsInText, linkedinJobId, parseJobTitle, parseJobLocation, MIN_JOB_ID_DIGITS };

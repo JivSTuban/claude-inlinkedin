@@ -26,6 +26,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
+const jobLinks = require('./linkedin-job-links');
 
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PROFILE = process.env.LINKEDIN_PROFILE || path.join(process.env.HOME, '.linkedin-codex-profile');
@@ -123,20 +124,22 @@ async function jobDetail(page, id) {
   await page.goto(`${BASE}/jobs/view/${id}/`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(3500);
   if (await loginWall(page)) return { wall: true };
-  // Search cards carry title/company/location; a job someone DMed arrives as a bare id, so read the top card.
-  const top = await page.evaluate(() => {
-    const q = (s) => (document.querySelector(s)?.innerText || '').trim();
-    return {
-      title: q('h1').split('\n')[0],
-      company: q('.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name') || q('a[href*="/company/"]').split('\n')[0],
-      location: q('.job-details-jobs-unified-top-card__primary-description-container, .jobs-unified-top-card__bullet').replace(/\s*\n\s*/g, ' ').slice(0, 160),
-    };
-  }).catch(() => ({ title: '', company: '', location: '' }));
+  // Search cards carry title/company/location; a job someone DMed arrives as a bare id, so read the
+  // page. Live pages have no <h1>: the title is in document.title, the location in the first lines.
+  const head = await page.evaluate(() => ({
+    docTitle: document.title,
+    lines: ((document.querySelector('main') || document.body).innerText || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 10),
+    company: ((document.querySelector('a[href*="/company/"]') || {}).innerText || '').split('\n')[0].trim(),
+  })).catch(() => ({ docTitle: '', lines: [], company: '' }));
+  const parsed = jobLinks.parseJobTitle(head.docTitle);
+  const top = { title: parsed.title, company: parsed.company || head.company, location: jobLinks.parseJobLocation(head.lines) };
   const body = clean(await page.locator('main').first().innerText({ timeout: 8000 }).catch(() => ''));
   const jd = clean(await page.locator('#job-details, .jobs-description__content, .jobs-description').first().innerText({ timeout: 4000 }).catch(() => ''));
-  const closed = /No longer accepting applications/i.test(body);
+  // "Unable to load the page ... job posting has been removed" is how a taken-down job renders.
+  const closed = /No longer accepting applications|job posting has been removed|Unable to load the page/i.test(body);
   const easy = (await page.locator('[aria-label^="Easy Apply"]').count()) > 0;
-  const applied = /Applied \d|You applied/i.test(body) && !easy;
+  // An applied job swaps Easy Apply for an "Application status" block (live, 2026-10-15).
+  const applied = /Applied \d|You applied|Application status/i.test(body) && !easy;
   // #job-details often misses on the current markup and `main` then includes Premium upsells.
   // The real description always follows "About the job", so cut there and keep the top-card line.
   let text = jd;
@@ -402,19 +405,29 @@ async function readStep(page) {
   for (const [label, rs] of groups) {
     fields.push({ kind: 'radio', label, options: rs.map((r) => r.text), idxs: rs.map((r) => r.idx), empty: !rs.some((r) => r.checked), required: true });
   }
-  // Fallback: plain <input type=radio> not wrapped in a role=radio div (older forms), grouped by name.
-  const plain = await dlg.locator('input[type=radio]').evaluateAll((els) => els.filter((e) => !e.closest('[role=radio]')).map((e, idx) => ({
-    name: e.name || e.id, text: (e.labels && e.labels[0] ? e.labels[0].innerText : e.value).trim(),
-    legend: (e.closest('fieldset')?.querySelector('legend')?.innerText || '').trim(), checked: e.checked,
-    id: e.id,
-  })));
+  // Plain <input type=radio> not wrapped in a role=radio div, grouped by name. Live markup
+  // (2026-10-15): the <label for> is EMPTY, the option text ("Yes") sits in an ancestor that holds
+  // only this radio, and the question is the radio's own aria-label (also a <p> before the
+  // fieldset). Reading label.innerText gave blank options and the name "radio-group-_r_f_" as the
+  // question, so Codex was asked nothing it could answer and no such job could ever be applied to.
+  const plain = await dlg.locator('input[type=radio]').evaluateAll((els) => els.map((e, i) => [e, i]).filter(([e]) => !e.closest('[role=radio]')).map(([e, i]) => {
+    let text = (e.labels && e.labels[0] ? e.labels[0].textContent : '').trim();
+    for (let a = e.parentElement, k = 0; !text && a && k < 5; a = a.parentElement, k++) {
+      if (a.querySelectorAll('input[type=radio]').length !== 1) break;
+      text = (a.innerText || '').trim();
+    }
+    const fs = e.closest('fieldset');
+    const prev = fs && fs.previousElementSibling ? (fs.previousElementSibling.innerText || '').trim() : '';
+    const legend = ((fs && fs.querySelector('legend') ? fs.querySelector('legend').innerText : '') || prev || e.getAttribute('aria-label') || '').replace(/\s*\*\s*$/, '').trim();
+    return { name: e.name || e.id, text: text || e.value, legend, checked: e.checked, id: e.id, pos: i };
+  }));
   const pg = new Map();
   for (const r of plain) {
     const k = r.name;
     if (!pg.has(k)) pg.set(k, []);
     pg.get(k).push(r);
   }
-  for (const [, rs] of pg) fields.push({ kind: 'plainradio', label: rs[0].legend || rs[0].name, options: rs.map((r) => r.text), ids: rs.map((r) => r.id), empty: !rs.some((r) => r.checked), required: true });
+  for (const [, rs] of pg) fields.push({ kind: 'plainradio', label: rs[0].legend || rs[0].name, options: rs.map((r) => r.text), ids: rs.map((r) => r.id), pos: rs.map((r) => r.pos), empty: !rs.some((r) => r.checked), required: true });
   const cbs = await dlg.locator('input[type=checkbox]').evaluateAll((els) => els.map((e, idx) => ({
     idx, label: (e.labels && e.labels[0] ? e.labels[0].innerText : e.getAttribute('aria-label') || '').trim(), checked: e.checked, required: e.required,
   })));
@@ -439,7 +452,22 @@ async function fillField(page, f, value) {
     await dlg.locator('div[role=radio]').nth(f.idxs[k]).click();
   } else if (f.kind === 'plainradio') {
     const k = f.options.findIndex((o) => norm(o) === norm(value));
-    await dlg.locator(`input[type=radio][id="${f.ids[k]}"]`).check({ force: true });
+    // Live radios are visually hidden: `check({force})` fails "outside of the viewport", and the
+    // ids are React useId values that CHANGE when the click re-renders the group, so a lookup by
+    // id hangs 30s (2026-10-15). Find the radio by its position in the dialog, click the empty
+    // <label for> overlay, and verify the checked state, because a silent miss would submit a
+    // blank answer.
+    const radios = dlg.locator('input[type=radio]');
+    const pos = f.pos[k];
+    const id = await radios.nth(pos).getAttribute('id', { timeout: 5000 }).catch(() => null);
+    const lab = id ? dlg.locator(`label[for="${id}"]`).first() : null;
+    if (lab && (await lab.count())) await lab.click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(400);
+    if (!(await radios.nth(pos).isChecked({ timeout: 4000 }).catch(() => false))) {
+      await radios.nth(pos).evaluate((e) => e.click(), null, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(400);
+    }
+    if (!(await radios.nth(pos).isChecked({ timeout: 4000 }).catch(() => false))) throw new Error('radio did not stay checked');
   } else if (f.kind === 'checkbox') {
     await dlg.locator('input[type=checkbox]').nth(f.idx).check({ force: true });
   }

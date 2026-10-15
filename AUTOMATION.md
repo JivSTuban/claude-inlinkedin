@@ -112,6 +112,8 @@ inbox read (linkedin-inbox.js)  ->  digest.json job_leads  ->  scan --dm --dm-on
 - **Cost**: no links, no extra work. With links: one decide pass (~27K tokens) plus, only if questions are unanswered, one answer pass.
 - **Dry run**: `linkedin-codex-runner.sh inbox --dry-run` fills the forms to Review and records nothing.
 - **Tests**: `tests/battle/test_job_links.js` (extractor), `run_runner_tests.sh` section 5e (the chained pass).
+- **Real job-page facts** (2026-10-15, found by dry-running the DM path on live jobs): no `<h1>` (title and company come from `document.title`, "Title | Company | LinkedIn"); an applied job shows an "Application status" block instead of Easy Apply; a taken-down job says "Unable to load the page"; location is the first `a · b ago · N applicants` line.
+- **Real Easy Apply radio markup** (same day): question text is the radio's `aria-label` (and a `<p>` before the fieldset), the `<label for>` is empty and is the click target, option text sits in an ancestor, and the ids are React `useId` values that change after a click. The filler now finds radios by position and verifies they stayed checked. Before this fix, any job with Yes/No questions asked Codex about `radio-group-_r_f_` and could never be answered.
 - **Real markup** (2026-10-15): there is no `.msg-s-message-group`; messages are `.msg-s-event-listitem`, the other person's carry `--other`. Thread rows have no `a[href*="/messaging/thread/"]` right now, so the reader falls back to the first anchor.
 
 ## How It Works
