@@ -146,9 +146,9 @@ run_codex() {   # run_codex <profile> <summary file> <prompt>
 # exactly that), so every pass must end with RUN_STATUS=ok for the run to count.
 status_of() { grep -o 'RUN_STATUS=[^[:space:]`]*' "$1" 2>/dev/null | tail -1; }
 
-# Inbox pass: linkedin-inbox.js reads, Codex decides with no browser, linkedin-inbox.js
+# Inbox reply pass: linkedin-inbox.js reads, Codex decides with no browser, linkedin-inbox.js
 # sends + verifies. Writes its RUN_STATUS to $1; returns Codex's exit code (142 = cap).
-inbox_pass() {
+inbox_replies_pass() {
     local sum="$1" rc n
     rm -rf "$INBOX_DIR"; mkdir -p "$INBOX_DIR"
     $INBOX_BIN read --out "$INBOX_DIR/digest.json" --sent-log "$OUTREACH_DIR/inbox-sent.jsonl" ${LINKEDIN_TEST_BASE:+--base "$LINKEDIN_TEST_BASE"}
@@ -184,12 +184,16 @@ APPLY_SKILL='No human is attached, so never ask a question: follow /Users/admin/
 capped() { perl -e 'alarm shift; exec @ARGV' "${LINKEDIN_STEP_SECONDS:-1500}" "$@"; }
 jobs_in() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get(sys.argv[2],[])))' "$1" "${2:-jobs}" 2>/dev/null || echo 0; }
 apply_pass() {
-    local sum="$1" rc n arc npend ids sum2 files
+    local sum="$1" kind="${2:-search}" rc n arc npend ids sum2 files scan_args
     local dry=""; [ -n "$DRY_RUN" ] && dry="--dry-run"
     local base=""; [ -n "${LINKEDIN_TEST_BASE:-}" ] && base="--base $LINKEDIN_TEST_BASE"
     files="--digest $APPLY_DIR/digest.json --profile $OUTREACH_DIR/apply-profile.json --bank $OUTREACH_DIR/apply-answer-bank.json --log $OUTREACH_DIR/apply-log.jsonl"
     rm -rf "$APPLY_DIR"; mkdir -p "$APPLY_DIR"
-    capped $APPLY_BIN scan --out "$APPLY_DIR/digest.json" --applied "$OUTREACH_DIR/apply-log.jsonl" $base
+    scan_args="--applied $OUTREACH_DIR/apply-log.jsonl"
+    # dm: only the job links the inbox reader found this run (no keyword search). Links that are
+    # not Easy Apply go to needs-jiv.jsonl; a dry run records nothing and tells nobody.
+    [ "$kind" = dm ] && scan_args="$scan_args --dm $INBOX_DIR/digest.json --dm-only --needs-jiv $OUTREACH_DIR/needs-jiv.jsonl $dry"
+    capped $APPLY_BIN scan --out "$APPLY_DIR/digest.json" $scan_args $base
     rc=$?
     if [ $rc -eq 3 ]; then
         echo "Apply: LinkedIn showed a login wall, nothing scanned. RUN_STATUS=blocked:linkedin_session_expired" > "$sum"; return 0
@@ -227,6 +231,24 @@ apply_pass() {
         fi
     fi
     [ $arc -eq 4 ] && echo "RUN_STATUS=blocked:apply_failed (see apply-log.jsonl)" >> "$sum"
+    return 0
+}
+
+# Inbox pass = replies, then apply to the job links people sent. The reader puts every link
+# it saw into digest.json (job_leads), so one Chrome read serves both. No links, no second pass.
+inbox_pass() {
+    local sum="$1" rc dsum st nleads
+    inbox_replies_pass "$sum"
+    rc=$?
+    [ $rc -ne 0 ] && return $rc
+    nleads=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(l.get("linkedin_job_ids",[]))+len(l.get("external",[])) for l in d.get("job_leads",[])))' "$INBOX_DIR/digest.json" 2>/dev/null || echo 0)
+    [ "${nleads:-0}" = 0 ] && return 0
+    dsum="${sum%-summary.md}-dmapply-summary.md"
+    apply_pass "$dsum" dm
+    rc=$?
+    [ $rc -ne 0 ] && return $rc
+    st=$(status_of "$dsum")
+    [ "$st" = "RUN_STATUS=ok" ] || echo "${st:-RUN_STATUS=missing} (dm apply pass)" >> "$sum"
     return 0
 }
 

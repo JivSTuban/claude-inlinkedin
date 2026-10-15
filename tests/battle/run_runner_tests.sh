@@ -198,6 +198,25 @@ fresh apply-noprofile; mkapply; rm -f "$T/apply-profile.json"
 LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply; RC=$?
 chk '[ $RC -eq 3 ] && [ ! -e "$SHIMS/decide-called" ] && grep -q "apply_profile_missing" "$LOGF"' "apply: missing apply-profile.json blocks before Codex (got $RC)"
 
+# 5e. job links people sent in DMs: the inbox pass hands them to the same apply pipeline.
+#     The reader's digest carries job_leads; no leads means no second pass and no Chrome.
+printf '#!/bin/bash\n[ "$1" = read ] && echo %s > "$3"\nexit 0\n' "'{\"threads\":[],\"job_leads\":[{\"name\":\"Ana\",\"thread_url\":\"u\",\"linkedin_job_ids\":[\"111\"],\"external\":[]}]}'" > "$SHIMS/inbox-leads"
+chmod +x "$SHIMS/inbox-leads"
+fresh dm-apply; mkapply
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ -e "$SHIMS/decide-called" ]' "dm apply: a job link in the inbox starts the apply pipeline (got $RC)"
+chk 'grep "^scan" "$SHIMS/apply-calls" | head -1 | grep -q -- "--dm .*digest.json --dm-only"' "dm apply: scan is DM-only and reads the inbox digest"
+chk '! grep "^scan" "$SHIMS/apply-calls" | grep -q -- "--dry-run"' "dm apply: a real run never passes --dry-run to the scan"
+fresh dm-dry; mkapply
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox --dry-run >/dev/null
+chk 'grep "^scan" "$SHIMS/apply-calls" | grep -q -- "--dry-run" && [ "$(grep "^apply" "$SHIMS/apply-calls" | grep -c -- "--dry-run")" = 2 ]' "dm apply: --dry-run reaches the scan and every fill"
+fresh dm-none; mkapply
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-empty" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/apply-calls" ] && [ ! -e "$SHIMS/decide-called" ]' "dm apply: no job links, apply pipeline never starts (got $RC)"
+fresh dm-fail; mkapply
+FAKE_WALL=1 LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox; RC=$?
+chk '[ $RC -eq 3 ] && grep -q "linkedin_session_expired" "$LOGF"' "dm apply: a login wall in the DM scan fails the run, not silently ok (got $RC)"
+
 # 6. notifier: each escalation once, malformed line survives, state advances
 fresh notify; Q="$T/q.jsonl"; S="$T/state"
 n() { LINKEDIN_NOTIFY_QUEUE="$Q" LINKEDIN_NOTIFY_STATE="$S" LINKEDIN_NOTIFY_DRY=1 python3 "$NOTIFY" | grep -c "notify dry"; }

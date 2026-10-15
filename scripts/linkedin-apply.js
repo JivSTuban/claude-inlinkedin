@@ -2,6 +2,9 @@
 // Deterministic LinkedIn Easy Apply I/O for the Mac Mini Codex runs.
 //
 //   node scripts/linkedin-apply.js scan  --out <digest.json> [--max 12] [--window 86400] [--applied <log.jsonl>]
+//                                        [--dm <inbox-digest.json> [--dm-only] [--needs-jiv <needs-jiv.jsonl>] [--dry-run]]
+//        --dm        also queue the job links people sent in DMs (inbox reader's job_leads), ahead of search
+//        --dm-only   those links only, no keyword search; exits without Chrome when none is new
 //   node scripts/linkedin-apply.js apply --digest <digest.json> --decisions <decisions.json> --profile <apply-profile.json>
 //                                        --bank <answer-bank.json> --pending <pending.json> --log <apply-log.jsonl> [--dry-run]
 //
@@ -119,8 +122,18 @@ async function scanCards(page, url) {
 async function jobDetail(page, id) {
   await page.goto(`${BASE}/jobs/view/${id}/`, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(3500);
-  const body = clean(await page.locator('main').first().innerText().catch(() => ''));
-  const jd = clean(await page.locator('#job-details, .jobs-description__content, .jobs-description').first().innerText().catch(() => ''));
+  if (await loginWall(page)) return { wall: true };
+  // Search cards carry title/company/location; a job someone DMed arrives as a bare id, so read the top card.
+  const top = await page.evaluate(() => {
+    const q = (s) => (document.querySelector(s)?.innerText || '').trim();
+    return {
+      title: q('h1').split('\n')[0],
+      company: q('.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name') || q('a[href*="/company/"]').split('\n')[0],
+      location: q('.job-details-jobs-unified-top-card__primary-description-container, .jobs-unified-top-card__bullet').replace(/\s*\n\s*/g, ' ').slice(0, 160),
+    };
+  }).catch(() => ({ title: '', company: '', location: '' }));
+  const body = clean(await page.locator('main').first().innerText({ timeout: 8000 }).catch(() => ''));
+  const jd = clean(await page.locator('#job-details, .jobs-description__content, .jobs-description').first().innerText({ timeout: 4000 }).catch(() => ''));
   const closed = /No longer accepting applications/i.test(body);
   const easy = (await page.locator('[aria-label^="Easy Apply"]').count()) > 0;
   const applied = /Applied \d|You applied/i.test(body) && !easy;
@@ -132,7 +145,42 @@ async function jobDetail(page, id) {
     const top = body.split('\n').slice(0, 4).join(' | ');
     text = i >= 0 ? `${top}\n${body.slice(i + 'About the job'.length).trim()}` : body;
   }
-  return { jd: text.slice(0, 2600), closed, easy_apply: easy, applied };
+  return { jd: text.slice(0, 2600), closed, easy_apply: easy, applied, ...top };
+}
+
+const DM_MAX = 8; // job links read per run; the apply step caps submissions separately (MAX_APPLIES)
+
+/** Job leads the inbox reader found (`job_leads` in its digest), de-duplicated by job id / url. */
+function dmLeads(file) {
+  const out = { ids: [], external: [] };
+  if (!file || !fs.existsSync(file)) return out;
+  let digest;
+  try { digest = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return out; }
+  const ids = new Set();
+  const urls = new Set();
+  for (const lead of digest.job_leads || []) {
+    for (const id of lead.linkedin_job_ids || []) {
+      if (!ids.has(id)) { ids.add(id); out.ids.push({ id, shared_by: lead.name, thread_url: lead.thread_url }); }
+    }
+    for (const url of lead.external || []) {
+      if (!urls.has(url)) { urls.add(url); out.external.push({ url, shared_by: lead.name, thread_url: lead.thread_url }); }
+    }
+  }
+  return out;
+}
+
+/**
+ * Tell Jiv about a job link the pipeline cannot apply to (off-LinkedIn page, or a LinkedIn job with
+ * no Easy Apply). One needs-jiv.jsonl row per url, so the Discord DM goes out once. Dry runs only log.
+ */
+function tellJiv(file, lead, urls, why) {
+  if (!file) return;
+  const have = read(file);
+  const fresh = [].concat(urls).filter((u) => !have.includes(u));
+  if (!fresh.length) return;
+  if (DRY) { log(`(dry run) would tell Jiv: ${fresh.join(' ')}`); return; }
+  const row = { at: new Date().toISOString(), name: lead.shared_by, thread_url: lead.thread_url, their_message: `Sent ${fresh.length > 1 ? 'job links' : 'a job link'}: ${fresh.join(' ')}`, why, suggested_reply: '' };
+  fs.appendFileSync(file, JSON.stringify(row) + '\n');
 }
 
 async function scan() {
@@ -140,10 +188,55 @@ async function scan() {
   const max = Number(opt('max', 12));
   const windowSec = Number(opt('window', 86400));
   const seen = loadSeen(opt('applied'));
+  const digest = { generated_at: new Date().toISOString(), window_seconds: windowSec, session_expired: false, stats: {}, jobs: [] };
+  // Jobs people DMed to Jiv (inbox reader's job_leads). They go first, skip the keyword/location
+  // filters (a person chose them), and still go through fit + the 70 gate like any other job.
+  const leads = dmLeads(opt('dm'));
+  const dmNew = leads.ids.filter((l) => !seen.ids.has(l.id)).slice(0, DM_MAX);
+  const byThread = new Map(); // one DM per person, however many links they sent
+  for (const e of leads.external) byThread.set(e.thread_url, { lead: e, urls: [...(byThread.get(e.thread_url)?.urls || []), e.url] });
+  for (const { lead, urls } of byThread.values()) tellJiv(opt('needs-jiv'), lead, urls, 'Job link off LinkedIn. The runner only applies through LinkedIn Easy Apply, so this one is yours.');
+  const dmOnly = flag('dm-only');
+  if (dmOnly && !dmNew.length) {
+    fs.writeFileSync(out, JSON.stringify(digest, null, 1));
+    log(`dm: ${leads.ids.length} LinkedIn link(s), none new; ${leads.external.length} external`);
+    return 0; // no Chrome launched for links already handled
+  }
   const ctx = await launch();
   const page = ctx.pages()[0] || (await ctx.newPage());
-  const digest = { generated_at: new Date().toISOString(), window_seconds: windowSec, session_expired: false, stats: {}, jobs: [] };
+  // The apply log doubles as the scan's memory: a closed, already-applied or off-site job is
+  // written down once so it is not re-opened every 3 hours.
+  const note = (o) => { const f = opt('applied'); if (f) fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), source: 'dm', ...o, dry_run: DRY || undefined }) + '\n'); };
   try {
+    for (const l of dmNew) {
+      let d;
+      try { d = await jobDetail(page, l.id); } catch (e) { log(`dm detail failed for ${l.id}: ${e.message.split('\n')[0]}`); continue; }
+      if (d.wall) {
+        digest.session_expired = true;
+        fs.writeFileSync(out, JSON.stringify(digest, null, 1));
+        log('login wall at', page.url());
+        return 3;
+      }
+      const why = d.closed ? 'closed' : d.applied ? 'already_applied' : !d.easy_apply ? 'no_easy_apply' : null;
+      if (!why && d.company && d.title && seen.pairs.has((d.company + '|' + d.title).toLowerCase())) {
+        note({ jobId: l.id, company: d.company, title: d.title, status: 'duplicate_role' });
+        log(`dm ${l.id}: duplicate_role ${d.company} | ${d.title}`);
+        continue;
+      }
+      if (why) {
+        note({ jobId: l.id, company: d.company, title: d.title, status: why, shared_by: l.shared_by });
+        log(`dm ${l.id}: ${why}`);
+        if (why === 'no_easy_apply') tellJiv(opt('needs-jiv'), l, `${BASE}/jobs/view/${l.id}/`, 'LinkedIn job with no Easy Apply (applies on the company site). Yours to apply.');
+        continue;
+      }
+      digest.jobs.push({ n: digest.jobs.length + 1, id: l.id, title: d.title, company: d.company, location: d.location, posted: '', source: 'dm', shared_by: l.shared_by, jd: d.jd });
+    }
+    if (dmOnly) {
+      digest.stats = { dm_links: leads.ids.length, dm_new: dmNew.length, candidates: digest.jobs.length };
+      fs.writeFileSync(out, JSON.stringify(digest, null, 1));
+      log(`dm: ${leads.ids.length} link(s), ${dmNew.length} new, candidates=${digest.jobs.length}`);
+      return 0;
+    }
     const pool = new Map();
     let cards = 0;
     for (const seed of SEEDS) {
@@ -162,15 +255,16 @@ async function scan() {
       }
     }
     const all = [...pool.values()];
+    const dmIds = new Set(digest.jobs.map((j) => j.id)); // already queued above, from a DM
     const keep = all.filter((j) =>
-      j.easy_apply && !j.applied && !seen.ids.has(j.id)
+      j.easy_apply && !j.applied && !seen.ids.has(j.id) && !dmIds.has(j.id)
       && !seen.pairs.has((j.company + '|' + j.title).toLowerCase())
       && ELIGIBLE_LOC.test(j.location) && !TITLE_NOISE.test(j.title));
     digest.stats = { cards, unique: all.length, eligible_location: all.filter((j) => ELIGIBLE_LOC.test(j.location)).length, after_filters: keep.length };
     // PH-geo seed before worldwide: those are the ones we can actually take.
     keep.sort((a, b) => (a.seed === b.seed ? 0 : a.seed === 'ph' ? -1 : 1));
     // The same role is often posted once per city (Manila, Cebu, ...). One application per company+title.
-    const roleSeen = new Set();
+    const roleSeen = new Set(digest.jobs.filter((j) => j.company && j.title).map((j) => (j.company + '|' + j.title).toLowerCase()));
     const uniq = keep.filter((j) => {
       const k = (j.company + '|' + j.title).toLowerCase();
       if (roleSeen.has(k)) return false;
@@ -488,7 +582,8 @@ async function apply() {
   try {
     const handled = new Set(); // company+title already applied to in this run (same role, another city)
     for (const job of jobs) {
-      const role = (job.company + '|' + job.title).toLowerCase();
+      // No company read from the page (a DMed job): key on the id so two such jobs are not "duplicates".
+      const role = job.company && job.title ? (job.company + '|' + job.title).toLowerCase() : 'id:' + job.id;
       if (handled.has(role)) {
         log(`duplicate_role: ${job.company} | ${job.title}`);
         record({ jobId: job.id, company: job.company, title: job.title, status: 'duplicate_role', dry_run: DRY || undefined });
@@ -500,7 +595,7 @@ async function apply() {
       await discardModal(page).catch(() => {});
       const fit = want.get(job.id)?.fit;
       log(`${r.status}: ${job.company} | ${job.title}${r.reason ? ' (' + r.reason + ')' : ''}${r.pending ? ` (${r.pending.length} unanswered)` : ''}`);
-      record({ jobId: job.id, company: job.company, title: job.title, fit, status: r.status, reason: r.reason, question: r.question, filled: (r.used || []).length, sources: (r.used || []).map((u) => u.source), dry_run: DRY || undefined });
+      record({ jobId: job.id, company: job.company, title: job.title, fit, source: job.source, shared_by: job.shared_by, status: r.status, reason: r.reason, question: r.question, filled: (r.used || []).length, sources: (r.used || []).map((u) => u.source), dry_run: DRY || undefined });
       if (r.status === 'session_expired') { rc = 3; break; }
       if (r.status === 'needs_answer') pendingOut.push({ job_id: job.id, company: job.company, title: job.title, jd: (job.jd || '').slice(0, 1800), questions: r.pending });
       if (['error', 'validation_error'].includes(r.status)) failed++;

@@ -21,7 +21,8 @@ Cebu, Philippines, fully remote. About 2 years of paid experience: AI automation
 
 ## APPLY DECIDE
 
-Input: `.apply/digest.json` (`jobs`: `id, title, company, location, posted, jd`), plus `apply-profile.json` and `apply-resume.md`.
+Input: `.apply/digest.json` (`jobs`: `id, title, company, location, posted, jd`, and `source: "dm"` plus `shared_by` for a job a person sent Jiv in a LinkedIn message), plus `apply-profile.json` and `apply-resume.md`.
+A `dm` job is a lead from a real person, so give it the benefit of the doubt on borderline stack fit, and never on the rules below that are facts (eligibility from the Philippines, a hard must-have Jiv lacks, pay, red flags). `title`, `company` or `location` can be empty on a `dm` job (read from the page); take them from `jd` instead. Never mention `shared_by` in any answer.
 Output: `.apply/decisions.json`, a JSON array with one object per digest job: `{"id": "...", "apply": true|false, "fit": 0-100, "reason": "one short sentence"}`.
 
 Apply (`apply: true`, `fit` 70 or more) only when ALL hold:

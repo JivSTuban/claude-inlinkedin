@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
 const gate = require('./linkedin-inbox-gate');
+const jobLinks = require('./linkedin-job-links');
 
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const PROFILE = process.env.LINKEDIN_PROFILE || path.join(process.env.HOME, '.linkedin-codex-profile');
@@ -64,6 +65,37 @@ async function lastSender(page) {
 
 const isJiv = (name) => /^(you|jiv tuban)\b/i.test(name);
 
+/**
+ * Job-opening links the OTHER person put in this thread. Jiv's own links are excluded (his
+ * portfolio, a role he forwarded) so the applier only acts on what someone sent him.
+ * Real LinkedIn marks each message `.msg-s-event-listitem` and adds `--other` when the other
+ * person wrote it (verified on the live inbox 2026-10-15; there is NO .msg-s-message-group).
+ * The mock has no such markup, so there the plain text is scanned. `lnkd.in` short links are
+ * followed once in the browser context, because they hide the real job id.
+ */
+async function threadJobLinks(page, ctx, text) {
+  const { grouped, hrefs } = await page.evaluate(() => {
+    const items = [...document.querySelectorAll('.msg-s-event-listitem')];
+    if (!items.length) return { grouped: false, hrefs: [...document.querySelectorAll('ol.conversation a[href]')].map((a) => a.href) };
+    const theirs = items.filter((e) => e.classList.contains('msg-s-event-listitem--other'));
+    return { grouped: true, hrefs: theirs.flatMap((e) => [...e.querySelectorAll('a[href]')].map((a) => a.href)) };
+  }).catch(() => ({ grouped: true, hrefs: [] }));
+  let found = jobLinks.extract(grouped ? hrefs : [...hrefs, ...jobLinks.urlsInText(text)]);
+  for (const short of found.short.slice(0, 5)) {
+    try {
+      const r = await ctx.request.get(short, { timeout: 15000 });
+      found = mergeLinks(found, jobLinks.extract([r.url()]));
+    } catch (_) { /* an unresolvable short link is just not a lead */ }
+  }
+  delete found.short;
+  return found;
+}
+const mergeLinks = (a, b) => ({
+  linkedin_job_ids: [...new Set([...a.linkedin_job_ids, ...b.linkedin_job_ids])],
+  external: [...new Set([...a.external, ...b.external])],
+  short: a.short,
+});
+
 async function launch() {
   return chromium.launchPersistentContext(PROFILE, {
     headless: false,
@@ -95,7 +127,7 @@ async function read() {
   const scan = Number(opt('scan', 30));
   const ctx = await launch();
   const page = ctx.pages()[0] || (await ctx.newPage());
-  const digest = { generated_at: new Date().toISOString(), base: BASE, session_expired: false, threads: [], last_message_from_you: [], conversation_ended: [] };
+  const digest = { generated_at: new Date().toISOString(), base: BASE, session_expired: false, threads: [], last_message_from_you: [], conversation_ended: [], job_leads: [] };
   // What the bot already sent per thread: the gate stops a chat the bot has volleyed enough.
   const sentLog = opt('sent-log');
   const sentRows = sentLog && fs.existsSync(sentLog)
@@ -121,11 +153,10 @@ async function read() {
       const preview = clean(await item.innerText().catch(() => ''));
       if (!preview) continue;
       const name = preview.split('\n').find((l) => !/^Status is /.test(l)) || '';
-      // The list shows "You: ..." when Jiv sent the last message: nothing to answer, don't open it.
-      if (/(^|\n)You:/.test(preview)) {
-        digest.last_message_from_you.push(name);
-        continue;
-      }
+      // The list shows "You: ..." when Jiv sent the last message: nothing to answer, but the
+      // thread can still hold a job link nobody applied to (the bot's holding reply came after
+      // it). Open it for the links only; it never reaches Codex.
+      const youLast = /(^|\n)You:/.test(preview);
       // The first <a> in a row can be the avatar (href /in/...), which navigates to the
       // profile and times out waiting for that navigation: that failed the whole run on
       // 2026-10-02 and 2026-10-05. Prefer the thread link, and never let one stuck row
@@ -149,8 +180,15 @@ async function read() {
       await page.locator(THREAD_PANES[0] + ', ' + THREAD_PANES[1]).first().waitFor({ timeout: 10000 }).catch(() => {});
       const text = await paneText(page);
       const sender = await lastSender(page);
+      // Before any skip below: a thread that is ended, or already answered, can still hold a
+      // job link nobody has applied to yet. linkedin-apply.js scan --dm dedupes against its log.
+      const links = await threadJobLinks(page, ctx, text);
+      if (links.linkedin_job_ids.length || links.external.length) {
+        digest.job_leads.push({ name, thread_url: url, ...links });
+        log(`job link(s) from ${name}: ${links.linkedin_job_ids.length} LinkedIn, ${links.external.length} external`);
+      }
       // The list preview often shows a subject line, not "You:", so check the thread too.
-      if (isJiv(sender)) {
+      if (youLast || isJiv(sender)) {
         digest.last_message_from_you.push(name);
         if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
         continue;
@@ -164,7 +202,7 @@ async function read() {
         if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
         continue;
       }
-      digest.threads.push({ n: digest.threads.length + 1, name, thread_url: url, last_sender: sender, list_preview: preview.slice(0, 300), bot_replies_7d: g.bot_replies, bot_cap_reached: g.bot_cap_reached, conversation: text.slice(-2500) });
+      digest.threads.push({ n: digest.threads.length + 1, name, thread_url: url, last_sender: sender, list_preview: preview.slice(0, 300), bot_replies_7d: g.bot_replies, bot_cap_reached: g.bot_cap_reached, job_links: links, conversation: text.slice(-2500) });
       if (!(await page.locator(LIST_ITEMS).count())) await openInbox(page);
     }
     fs.writeFileSync(out, JSON.stringify(digest, null, 1));

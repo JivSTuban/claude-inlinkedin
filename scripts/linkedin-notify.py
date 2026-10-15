@@ -48,13 +48,16 @@ def post(text):
 
 
 def format_item(item):
-    return (
+    text = (
         f"**LinkedIn needs you: {item.get('name', '?')}**\n"
         f"{item.get('thread_url', '')}\n"
         f"They said: {item.get('their_message', '')}\n"
-        f"Why I didn't reply: {item.get('why', '')}\n"
-        f"Suggested reply:\n> {item.get('suggested_reply', '')}"
+        f"Why I didn't reply: {item.get('why', '')}"
     )
+    # Job links the runner could not apply to carry no draft reply; an empty "> " quote is noise.
+    if item.get('suggested_reply'):
+        text += f"\nSuggested reply:\n> {item['suggested_reply']}"
+    return text
 
 
 def main():

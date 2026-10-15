@@ -97,6 +97,23 @@ scan (linkedin-apply.js)  ->  Codex: APPLY DECIDE  ->  fill (script)  ->  Codex:
 - **Real-LinkedIn facts** (2026-10-01): the modal's Next button is now named just `Next` (older notes say "Continue to next step"); pages are Contact info (prefilled) -> Resume (your resume is remembered) -> Additional Questions -> Review; a blocked Next shows "This field is required" / "Invalid input" and the page does not advance; numeric boxes reject words; `navigator.webdriver` must be false or Submit silently does nothing (the Playwright launch here already sets that).
 - The old MacBook skill `~/.claude/skills/linkedin-apply` (Claude-driven, interactive) still exists and is unchanged.
 
+### Job links people send in DMs (added 2026-10-15)
+
+People DM Jiv job openings. The **inbox pass** now chains an apply pass for them, through the same pipeline as above, so no new applier exists.
+
+```
+inbox read (linkedin-inbox.js)  ->  digest.json job_leads  ->  scan --dm --dm-only  ->  Codex: APPLY DECIDE  ->  fill  ->  ...same as Easy Apply
+```
+
+- **Where links come from**: `linkedin-inbox.js read` collects every URL from the OTHER person's messages (`.msg-s-event-listitem--other`; Jiv's own links never count) and classifies them in `scripts/linkedin-job-links.js` (LinkedIn job id, `lnkd.in` followed once, `safety/go` wrappers unwrapped, off-site job/ATS pages kept). It also opens "You: ..." threads, for links only, because a link usually sits in a chat the bot already answered. Those threads never reach Codex.
+- **LinkedIn jobs** (`/jobs/view/<id>`, `currentJobId=`): `linkedin-apply.js scan --dm <digest> --dm-only` opens each new id (max 8 per run), skips closed / already applied / no Easy Apply, and queues the rest with `source: "dm"` and `shared_by`. They skip the keyword and location filters (a person chose them) but go through the same fit gate (70+) and every honesty rule. Submissions stay capped at 5 per run.
+- **Not Easy Apply, or off LinkedIn**: the runner cannot apply there. One `needs-jiv.jsonl` row per person (Discord DM), once per URL.
+- **Memory**: dead, closed and off-site LinkedIn jobs are written to `apply-log.jsonl` with `source: "dm"` so they are not re-opened every 3h. When no id is new the scan exits before launching Chrome and Codex never starts.
+- **Cost**: no links, no extra work. With links: one decide pass (~27K tokens) plus, only if questions are unanswered, one answer pass.
+- **Dry run**: `linkedin-codex-runner.sh inbox --dry-run` fills the forms to Review and records nothing.
+- **Tests**: `tests/battle/test_job_links.js` (extractor), `run_runner_tests.sh` section 5e (the chained pass).
+- **Real markup** (2026-10-15): there is no `.msg-s-message-group`; messages are `.msg-s-event-listitem`, the other person's carry `--other`. Thread rows have no `a[href*="/messaging/thread/"]` right now, so the reader falls back to the first anchor.
+
 ## How It Works
 
 ```
