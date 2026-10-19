@@ -22,3 +22,6 @@ graphify-out/
 # Dependencies
 node_modules/
 __pycache__/
+
+# Private facts the OnlineJobs drafter may use (employer figures); canonical copy lives in the Obsidian vault
+scripts/oj-profile-facts.md

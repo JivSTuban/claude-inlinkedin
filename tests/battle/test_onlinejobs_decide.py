@@ -136,10 +136,19 @@ class Decide(unittest.TestCase):
     def test_marian_zoom_invite_request_is_a_meeting(self):
         self.assertEqual(act(MARIAN, {"sig": "x", "bot_replies": []}), ("meeting", "ask"))
 
+    def test_asking_for_examples_of_his_work_is_a_holding_reply_plus_alert(self):
+        # Goldencredit asked for "1-2 examples of advanced GoHighLevel systems you personally built". The bot
+        # must not improvise those; it holds and tells Jiv.
+        st = {"sig": "x", "bot_replies": []}
+        self.assertEqual(act(GHL, st)[0], "reply_notify")
+        for t in ["Please send me examples of your n8n work", "Can you share a portfolio link?", "Do you have case studies?"]:
+            self.assertEqual(act(page("Oct 19, 2026, 04:00 PM", t), st)[0], "reply_notify", t)
+        self.assertEqual(act(page("Oct 19, 2026, 04:00 PM", "I checked your portfolio, looks good. How many years of React?"), st)[0], "reply")
+
     def test_goldencredit_gets_a_reply_not_a_meeting_alarm(self):
         # "Before scheduling an interview" is a precondition, not a booking.
         st = {"sig": "x", "bot_replies": []}
-        self.assertEqual(act(GHL, st)[0], "reply")
+        self.assertNotEqual(act(GHL, st)[0], "meeting")
 
     def test_meeting_link(self):
         self.assertEqual(act(CALENDLY), ("meeting", "link"))
@@ -161,6 +170,137 @@ class Decide(unittest.TestCase):
 
     def test_handoff_thread_never_gets_an_auto_reply(self):
         self.assertEqual(act(PLAIN, {"sig": "x", "bot_replies": [], "handoff": True})[0], "handoff_msg")
+
+
+def exp(ts, name, email, body, initials="XX"):
+    """An EXPANDED message block as the page prints it: timestamp, initials, name, <email>, timestamp, body."""
+    return f"{ts}\n{initials}\n{name}\n<{email}>\n{ts}\n{body}\n"
+
+
+THREAD = (NAV
+          + exp("Oct 15, 2026, 09:00 AM", "Ana Reyes", "ana@acme.co", "Hi Jiv! Book a time that suits you: https://calendly.com/ana/intro")
+          + exp("Oct 15, 2026, 10:00 AM", "Jiv Sabolo Tuban", "jivtuban14@gmail.com", "Thanks Ana, see my portfolio https://farfolio.vercel.app and https://github.com/JivSTuban")
+          + exp("Oct 19, 2026, 04:00 PM", "Ana Reyes", "ana@acme.co", "Just checking in, did you get a chance to look?")
+          + FOOT)
+
+
+class Thread(unittest.TestCase):
+    def test_every_expanded_message_is_parsed_in_order(self):
+        ms = d.parse_messages(THREAD)
+        self.assertEqual([m["from_jiv"] for m in ms], [False, True, False])
+        self.assertEqual([m["name"] for m in ms], ["Ana Reyes", "Jiv Sabolo Tuban", "Ana Reyes"])
+        self.assertIn("calendly.com/ana/intro", ms[0]["text"])
+        self.assertEqual(ms[2]["text"], "Just checking in, did you get a chance to look?")
+        self.assertEqual(ms[2]["ts"], datetime(2026, 10, 19, 16, 0))
+
+    def test_calendar_link_from_two_messages_ago_is_found(self):
+        # The stated bug: links were only taken from the latest message.
+        ms = d.parse_messages(THREAD)
+        self.assertEqual(d.booking_links(ms[-1]["text"]), [])
+        self.assertEqual(d.thread_booking_links(ms), ["https://calendly.com/ana/intro"])
+
+    def test_jivs_own_links_are_never_treated_as_the_calendar(self):
+        ms = d.parse_messages(NAV + exp("Oct 15, 2026, 10:00 AM", "Jiv Sabolo Tuban", "jivtuban14@gmail.com",
+                                        "My calendar: https://calendly.com/jiv/me") + FOOT)
+        self.assertEqual(d.thread_booking_links(ms), [])
+
+    def test_newest_link_first_and_deduped(self):
+        t = (NAV + exp("Oct 1, 2026, 09:00 AM", "Ana", "a@b.co", "https://calendly.com/old/x")
+             + exp("Oct 2, 2026, 09:00 AM", "Ana", "a@b.co", "https://calendly.com/new/y and https://calendly.com/old/x") + FOOT)
+        self.assertEqual(d.thread_booking_links(d.parse_messages(t)), ["https://calendly.com/new/y", "https://calendly.com/old/x"])
+
+    def test_single_expanded_message_matches_parse_thread(self):
+        ms = d.parse_messages(COOPER)
+        self.assertEqual(len(ms), 1)
+        self.assertEqual(ms[0]["name"], d.parse_thread(COOPER)["name"])
+
+    def test_no_messages_is_an_empty_list(self):
+        self.assertEqual(d.parse_messages(""), [])
+        self.assertEqual(d.thread_booking_links([]), [])
+
+
+class Nudge(unittest.TestCase):
+    def st(self, hours_ago, **kw):
+        return {"alarm_ts": (NOW - timedelta(hours=hours_ago)).timestamp(), **kw}
+
+    def test_not_due_before_four_hours(self):
+        self.assertIsNone(d.nudge_due(self.st(3.9), NOW))
+
+    def test_first_reminder_at_four_hours_then_second_at_a_day(self):
+        self.assertEqual(d.nudge_due(self.st(4), NOW), 0)
+        self.assertIsNone(d.nudge_due(self.st(10, nudges=1), NOW))
+        self.assertEqual(d.nudge_due(self.st(24, nudges=1), NOW), 1)
+
+    def test_two_reminders_then_stop(self):
+        self.assertIsNone(d.nudge_due(self.st(100, nudges=2), NOW))
+
+    def test_resolved_or_never_alarmed_never_nudges(self):
+        self.assertIsNone(d.nudge_due(self.st(30, resolved=True), NOW))
+        self.assertIsNone(d.nudge_due({"nudges": 0}, NOW))
+        self.assertIsNone(d.nudge_due(None, NOW))
+
+    def test_jiv_replying_counts_but_the_bots_own_courtesy_reply_does_not(self):
+        bot = "Hi Ana, glad to meet. I am available Monday to Friday."
+        cs = self.st(5, bot_probe=d._squash(bot)[:60])
+        self.assertFalse(d.jiv_took_over({"from_jiv": True, "text": bot}, cs))
+        self.assertTrue(d.jiv_took_over({"from_jiv": True, "text": "Booked 3pm Friday, see you then."}, cs))
+        self.assertFalse(d.jiv_took_over({"from_jiv": False, "text": "anything"}, cs))
+        self.assertFalse(d.jiv_took_over({"from_jiv": True, "text": "x"}, {"nudges": 0}))   # never alarmed
+        self.assertTrue(d.jiv_took_over({"from_jiv": True, "text": "On it"}, {"needs_you": "video requested"}))
+
+
+class DraftSafety(unittest.TestCase):
+    GOOD = ("Hi Ana, thanks for reaching out. I have 5 years building n8n and Next.js automations and I am happy "
+            "to share examples. I am available Monday to Friday, 10 PM to 12 AM PHT.\n\nJiv Tuban\nFull-Stack Developer & AI Engineer")
+
+    def test_good_draft_passes(self):
+        self.assertEqual(d.reply_ok(self.GOOD), (True, ""))
+
+    def test_rejects_broken_drafts(self):
+        for bad, why in [("Hi", "too short"), ("x" * 1300, "too long"),
+                         (self.GOOD.replace("Ana", "[Name]"), "placeholder"),
+                         ("As an AI language model I cannot help with that request today, sorry about it. Jiv Tuban", "boilerplate"),
+                         (self.GOOD.replace("thanks", "thanks \u2014"), "dash"),
+                         (self.GOOD.replace("Jiv Tuban", "Regards"), "sign-off"),
+                         (self.GOOD + " Portfolio: https://evil.example/x", "invented link")]:
+            self.assertFalse(d.reply_ok(bad)[0], why)
+
+    def test_a_link_the_profile_or_thread_already_has_is_allowed(self):
+        t = self.GOOD + " Portfolio: https://farfolio.vercel.app/"
+        self.assertTrue(d.reply_ok(t, allowed_urls=["https://farfolio.vercel.app"])[0])
+        self.assertFalse(d.reply_ok(t)[0])
+
+
+class Availability(unittest.TestCase):
+    def test_new_york_label_follows_daylight_saving(self):
+        from datetime import date
+        self.assertEqual(d.availability_text(date(2026, 10, 23)),
+                         "Monday to Friday, 10 PM to 12 AM PHT (2 PM to 4 PM UTC, 10 AM to 12 PM EDT)")
+        self.assertEqual(d.availability_text(date(2026, 11, 5)),
+                         "Monday to Friday, 10 PM to 12 AM PHT (2 PM to 4 PM UTC, 9 AM to 11 AM EST)")
+
+
+class Digest(unittest.TestCase):
+    def test_nothing_to_say_gives_none(self):
+        self.assertIsNone(d.build_digest({"events": [], "convs": {}}, NOW))
+
+    def test_counts_last_24h_only_and_lists_open_items(self):
+        st = {"convs": {"1": {"who": "Marian B", "alarm_ts": NOW.timestamp()}, "2": {"who": "Ori", "needs_you": "take-home due today"},
+                        "3": {"who": "Done Co", "alarm_ts": NOW.timestamp(), "resolved": True}}}
+        d.record_event(st, "reply", "Ana", "9", NOW - timedelta(hours=2))
+        d.record_event(st, "meeting", "Marian B", "1", NOW - timedelta(hours=1))
+        d.record_event(st, "reply", "Old", "8", NOW - timedelta(hours=30))
+        text = d.build_digest(st, NOW)
+        self.assertIn("1 bot replies, 1 meetings alarmed", text)
+        self.assertIn("Marian B: meeting, no reply from you yet", text)
+        self.assertIn("Ori: take-home due today", text)
+        self.assertNotIn("Done Co", text)
+
+    def test_events_older_than_two_weeks_are_dropped(self):
+        st = {}
+        d.record_event(st, "reply", "Old", "1", NOW - timedelta(days=15))
+        d.record_event(st, "reply", "New", "2", NOW)
+        self.assertEqual([e["who"] for e in st["events"]], ["New"])
 
 
 if __name__ == "__main__":

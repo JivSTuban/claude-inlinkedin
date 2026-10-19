@@ -29,7 +29,9 @@ WINDOW = timedelta(days=7)
 # Something only Jiv can produce: a video, a recording, a form. The bot still sends a holding reply.
 NEEDS_ASSET_RE = re.compile(
     r"\b(video|loom|vidyard|screen ?record\w*|record(ing)? (yourself|a)|selfie)\b"
-    r"|forms\.gle|docs\.google\.com/forms|typeform\.com|tally\.so|airtable\.com/\S*form",
+    r"|forms\.gle|docs\.google\.com/forms|typeform\.com|tally\.so|airtable\.com/\S*form"
+    # Asking for specific examples of his work: only Jiv can pick and send them, so the bot must not improvise.
+    r"|\bexamples? of\b|\bcase stud(y|ies)\b|\b(send|share|provide|attach|show)\b[^.\n]{0,30}\b(examples?|samples?|portfolio|case stud\w+)\b",
     re.I,
 )
 # Questions hidden in the job post, "read until the end": a generic reply would be wrong, so no reply.
@@ -145,3 +147,164 @@ def decide(msg, cstate, now):
     if needs_asset(text):
         return "reply_notify", "video or form requested"
     return "reply", ""
+
+
+# ---------------------------------------------------------------------------------------------
+# Whole-thread parsing, follow-up nudges, draft safety and the daily digest (added 2026-10-19).
+# ---------------------------------------------------------------------------------------------
+from meeting_signal import booking_links  # noqa: E402
+
+
+def parse_messages(page_text):
+    """Every message in a conversation page, oldest first: [{from_jiv, name, ts, text}].
+
+    Needs the thread EXPANDED first (the checker clicks the collapsed headers): collapsed older
+    messages show only a one-line preview, so a calendar link sent three messages ago is invisible
+    until then. Each expanded message carries its own `<sender@email>` header line, so the page text
+    is split at those. Messages that are still collapsed have no email line and are skipped."""
+    lines = [l.strip() for l in (page_text or "").splitlines()]
+    end = len(lines)
+    for i, l in enumerate(lines):
+        if any(l.startswith(m) for m in FOOTER_MARKERS) and i > 0:
+            end = i
+            break
+    lines = lines[:end]
+    email_idx = [i for i, l in enumerate(lines) if EMAIL_LINE_RE.match(l)]
+    starts = []
+    for e in email_idx:
+        s = e
+        for k in range(1, 4):                      # header is [timestamp, initials?, name, <email>]
+            if e - k >= 0 and TS_RE.fullmatch(lines[e - k]):
+                s = e - k
+                break
+        starts.append(s)
+    out = []
+    for n, e in enumerate(email_idx):
+        nxt = starts[n + 1] if n + 1 < len(starts) else len(lines)
+        header = [l for l in lines[starts[n]:e] if l]
+        name = next((l for l in reversed(header) if not TS_RE.fullmatch(l) and len(l) > 3), "an employer")
+        ts_line = next((l for l in header if TS_RE.fullmatch(l)), "")
+        email = lines[e].strip("<>").lower()
+        body = [l for l in lines[e + 1:nxt] if l and not TS_RE.fullmatch(l)]
+        out.append({"from_jiv": email == JIV_EMAIL or "jiv" in name.lower(), "name": name[:60],
+                    "ts": last_timestamp(ts_line), "text": "\n".join(body).strip()})
+    return out
+
+
+def thread_booking_links(messages):
+    """Booking links from every message THEY wrote, newest first, deduped. Jiv's own messages are
+    skipped: his application text carries his portfolio links, and a reply may quote availability."""
+    seen = []
+    for m in reversed(messages or []):
+        if m["from_jiv"]:
+            continue
+        for link in booking_links(m["text"]):
+            if link not in seen:
+                seen.append(link)
+    return seen
+
+
+# --- follow-up when an alarmed meeting thread goes quiet --------------------------------------
+NUDGE_AFTER = (timedelta(hours=4), timedelta(hours=24))   # then stop: two reminders, not a siren
+
+
+def nudge_due(cstate, now):
+    """Index (0 or 1) of the next unsent reminder for an alarmed thread Jiv has not answered, else None."""
+    if not cstate or not cstate.get("alarm_ts") or cstate.get("resolved"):
+        return None
+    sent = cstate.get("nudges", 0)
+    if sent >= len(NUDGE_AFTER):
+        return None
+    age = now - datetime.fromtimestamp(cstate["alarm_ts"])
+    return sent if age >= NUDGE_AFTER[sent] else None
+
+
+def _squash(t):
+    return " ".join((t or "").split())
+
+
+def jiv_took_over(msg, cstate):
+    """Jiv's message in an alarmed or needs-you thread counts as taking over. The bot's own courtesy reply is also
+    sent from Jiv's account, so it must not: compare against the text the bot recorded sending."""
+    if not msg or not msg["from_jiv"] or not cstate or not (cstate.get("alarm_ts") or cstate.get("needs_you")):
+        return False
+    probe = cstate.get("bot_probe", "")
+    return not (probe and _squash(msg["text"]).startswith(probe))
+
+
+# --- draft safety: never send something obviously broken to an employer ----------------------
+BAD_DRAFT_RE = re.compile(
+    r"\[[^\]]{1,40}\]|\{[^}]{1,40}\}|<[^>]{1,40}>|\bas an ai\b|\blanguage model\b|\bi (can't|cannot) (assist|help)\b"
+    r"|\bundefined\b|\bnull\b|\bTODO\b|\blorem ipsum\b|```",
+    re.I,
+)
+URL_RE = re.compile(r"https?://[^\s)>\]]+", re.I)
+
+
+def reply_ok(draft, allowed_urls=()):
+    """(True, "") if the drafted reply is safe to send, else (False, reason)."""
+    t = (draft or "").strip()
+    if len(t) < 40:
+        return False, "too short"
+    if len(t) > 1200:
+        return False, "too long"
+    if BAD_DRAFT_RE.search(t):
+        return False, "placeholder or model boilerplate in the draft"
+    if "—" in t or "–" in t:
+        return False, "dash left in the draft"
+    if "jiv" not in t.lower():
+        return False, "missing the Jiv Tuban sign-off"
+    allowed = tuple(allowed_urls)
+    for url in URL_RE.findall(t):
+        if not any(url.rstrip(".,;") .startswith(a.rstrip("/")) or a.rstrip("/").startswith(url.rstrip(".,;/")) for a in allowed):
+            return False, f"invented link: {url[:60]}"
+    return True, ""
+
+
+# --- event log + daily digest -----------------------------------------------------------------
+EVENT_KEEP = timedelta(days=14)
+
+
+def record_event(state, kind, who, thread_id, now):
+    """Append to state['events'] (kinds: reply, meeting, needs, nudge, health) and drop old ones."""
+    ev = state.setdefault("events", [])
+    ev.append({"t": now.timestamp(), "k": kind, "who": who, "id": thread_id})
+    cutoff = (now - EVENT_KEEP).timestamp()
+    state["events"] = [e for e in ev if e["t"] >= cutoff]
+
+
+def build_digest(state, now, hours=24):
+    """One short text for the daily Discord digest, or None when there is nothing to say."""
+    since = (now - timedelta(hours=hours)).timestamp()
+    ev = [e for e in state.get("events", []) if e["t"] >= since]
+    count = lambda k: sum(1 for e in ev if e["k"] == k)
+    open_items = []
+    for tid, c in state.get("convs", {}).items():
+        if c.get("resolved"):
+            continue
+        if c.get("alarm_ts"):
+            open_items.append(f"{c.get('who', tid)}: meeting, no reply from you yet")
+        elif c.get("needs_you"):
+            open_items.append(f"{c.get('who', tid)}: {c['needs_you']}")
+    if not ev and not open_items:
+        return None
+    lines = [f"**OnlineJobs, last {hours}h:** {count('reply')} bot replies, {count('meeting')} meetings alarmed, "
+             f"{count('needs')} needing you, {count('health')} problems."]
+    if open_items:
+        lines.append("Still open for you:")
+        lines += [f"- {x}" for x in open_items[:8]]
+        if len(open_items) > 8:
+            lines.append(f"- and {len(open_items) - 8} more")
+    return "\n".join(lines)
+
+
+# --- availability text that stays correct across the US daylight-saving change ----------------
+def availability_text(on):
+    """His call window is fixed in Manila time (10 PM to 12 AM PHT, Monday to Friday). New York moves an
+    hour on 2026-11-01, so a hardcoded "EST" is wrong half the year; convert for the given date."""
+    from zoneinfo import ZoneInfo
+    start = datetime(on.year, on.month, on.day, 22, 0, tzinfo=ZoneInfo("Asia/Manila"))
+    ny = ZoneInfo("America/New_York")
+    s, e = start.astimezone(ny), (start + timedelta(hours=2)).astimezone(ny)
+    fmt = lambda d: d.strftime("%I %p").lstrip("0")
+    return f"Monday to Friday, 10 PM to 12 AM PHT (2 PM to 4 PM UTC, {fmt(s)} to {fmt(e)} {s.tzname()})"
