@@ -213,10 +213,11 @@ def send_reply(page, url, reply_text):
 def run():
     global OJ_EMAIL, OJ_PASSWORD, ANTHROPIC_KEY
 
-    # Time gate: only run 12 AM–6 AM PHT (16:00–22:59 UTC)
+    # Replies only go out 12 AM-6 AM PHT (16:00-22:59 UTC), but the scan and the ALERTS run all day:
+    # a meeting request at 10 AM must ring Jiv at 10 AM, not at midnight. Outside the window the run
+    # is alert-only and leaves every reply-needing thread untouched for the night run.
     utc_hour = datetime.now(timezone.utc).hour
-    if not (16 <= utc_hour <= 22):
-        sys.exit(0)
+    can_reply = 16 <= utc_hour <= 22
     acquire_lock()
 
     try:
@@ -334,6 +335,9 @@ def run():
                 notify_jiv(f"{who} wants to book a meeting ({detail}). Take over now.\n{body}",
                            level="meeting", title=f"Meeting ready: {who}", url=link,
                            key=f"oj:{conv_id}:meeting")
+                if not can_reply:
+                    cs.pop("row", None)       # night run still sends the courtesy reply; the key stops a second ring
+                    continue
                 _reply(page, link, conv_id, cs, sig, who, thread, msg, now, meeting=True)
                 cs["handoff"] = True          # the bot never talks in this thread again
                 cs["sig"] = sig
@@ -351,6 +355,13 @@ def run():
                 continue
 
             # reply / reply_notify
+            if not can_reply:
+                if action == "reply_notify":  # a video/form ask is Jiv's work: tell him now, reply tonight
+                    notify_jiv(f"{who} asked for a video or form. A holding reply goes out tonight.\n{body}",
+                               level="needs", title=f"OnlineJobs needs you: {who}", url=link,
+                               key=f"oj:{conv_id}:{sig}")
+                cs.pop("row", None)           # leave it unrecorded so the night run replies
+                continue
             _reply(page, link, conv_id, cs, sig, who, thread, msg, now, asset=(action == "reply_notify"))
 
         if changed:
