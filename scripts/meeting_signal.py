@@ -45,6 +45,24 @@ WHEN_RE = re.compile(
 )
 
 
+# Any URL-looking token; filtered through LINK_RE so only booking/call hosts survive.
+URL_TOKEN_RE = re.compile(r"(?:https?://)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?:/[^\s<>\"']*)?")
+
+
+def booking_links(text):
+    """Booking or call URLs in their message, scheme added, trailing punctuation stripped, in order.
+    These go into the alert so Jiv can tap straight to the calendar."""
+    out = []
+    for tok in URL_TOKEN_RE.findall(text or ""):
+        tok = tok.rstrip(".,;:!?)]}>'\"")
+        if not LINK_RE.search(tok):
+            continue
+        url = tok if tok.lower().startswith("http") else "https://" + tok
+        if url not in out:
+            out.append(url)
+    return out
+
+
 def meeting_signal(text):
     """Return "link", "ask" or None for a message written by the other side."""
     t = text or ""

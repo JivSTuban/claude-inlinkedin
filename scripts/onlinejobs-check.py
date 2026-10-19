@@ -29,6 +29,7 @@ SCRIPTS_DIR = os.path.expanduser("~/agent-work/jobi/scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # repo checkout: scripts/ sits beside this file
 import onlinejobs_decide as decide_mod  # noqa: E402
+from meeting_signal import booking_links  # noqa: E402
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.expanduser("~/.job-followup-config.json")
@@ -175,11 +176,14 @@ def reply_posted(page, url, reply_text):
 NOTIFY_SCRIPT = os.path.join(SCRIPTS_DIR, "linkedin-notify.py")
 
 
-def notify_jiv(text, level="needs", title=None, url=None, key=None):
+def notify_jiv(text, level="needs", title=None, url=None, key=None, links_from=""):
     """Reuse the shared notifier (Discord DM, plus Pushover for needs/meeting). `key` rings once per
-    event, so a meeting thread does not alarm again on every 30 minute run."""
+    event, so a meeting thread does not alarm again on every 30 minute run. The alert carries the
+    conversation link (`url`) and any booking link found in `links_from`."""
     cmd = ["python3", NOTIFY_SCRIPT, "--text", text, "--level", level]
-    for flag, val in (("--title", title), ("--url", url), ("--key", key)):
+    # Booking links come from the FULL message: the preview in `text` is cut at 400 chars and may lose one.
+    calendar = " ".join(booking_links(links_from))
+    for flag, val in (("--title", title), ("--url", url), ("--key", key), ("--calendar", calendar)):
         if val:
             cmd += [flag, val]
     try:
@@ -333,7 +337,7 @@ def run():
             if action == "meeting":
                 # Alarm first: Jiv booking the call matters more than the courtesy reply succeeding.
                 notify_jiv(f"{who} wants to book a meeting ({detail}). Take over now.\n{body}",
-                           level="meeting", title=f"Meeting ready: {who}", url=link,
+                           level="meeting", title=f"Meeting ready: {who}", url=link, links_from=msg["text"],
                            key=f"oj:{conv_id}:meeting")
                 if not can_reply:
                     cs.pop("row", None)       # night run still sends the courtesy reply; the key stops a second ring
@@ -348,7 +352,7 @@ def run():
                 why = {"handoff_msg": "New message in a thread you took over.",
                        "notify_only": "Needs you: it asks you to read the job post and answer its questions. No reply sent.",
                        "cap": "Auto-reply paused: 3 replies this week. Needs you."}[action]
-                if notify_jiv(f"{why}\n{who}: {body}", level="needs", title=f"OnlineJobs: {who}", url=link,
+                if notify_jiv(f"{why}\n{who}: {body}", level="needs", title=f"OnlineJobs: {who}", url=link, links_from=msg["text"],
                               key=f"oj:{conv_id}:{sig}"):
                     cs["sig"] = sig
                     changed = True
@@ -358,7 +362,7 @@ def run():
             if not can_reply:
                 if action == "reply_notify":  # a video/form ask is Jiv's work: tell him now, reply tonight
                     notify_jiv(f"{who} asked for a video or form. A holding reply goes out tonight.\n{body}",
-                               level="needs", title=f"OnlineJobs needs you: {who}", url=link,
+                               level="needs", title=f"OnlineJobs needs you: {who}", url=link, links_from=msg["text"],
                                key=f"oj:{conv_id}:{sig}")
                 cs.pop("row", None)           # leave it unrecorded so the night run replies
                 continue
@@ -405,7 +409,7 @@ def _reply(page, link, conv_id, cs, sig, who, thread, msg, now, asset=False, mee
     cs.setdefault("bot_replies", []).append(now.timestamp())
     if asset:
         notify_jiv(f"{who} asked for a video/form. A holding reply is sent. You owe them the real thing.\n{msg['text'][:400]}",
-                   level="needs", title=f"OnlineJobs needs you: {who}", url=link, key=f"oj:{conv_id}:{sig}")
+                   level="needs", title=f"OnlineJobs needs you: {who}", url=link, links_from=msg["text"], key=f"oj:{conv_id}:{sig}")
     return True
 
 

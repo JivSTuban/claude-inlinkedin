@@ -19,6 +19,8 @@ through this one script. Levels decide how loud it gets:
 
 Pushover keys live in ~/.pushover.env (PUSHOVER_TOKEN, PUSHOVER_USER; chmod 600), never in the
 repo. Without that file the Pushover leg is skipped and Discord still goes out.
+needs/meeting alerts carry `Conversation:` and `Calendar:` lines (booking links found in their message,
+via --calendar), links first on Pushover so its 1024 char cap cannot cut them.
 `--key X` sends a given alert once: a conversation that reaches "meeting" rings one time, not
 every 30 minute run.
 """
@@ -29,7 +31,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from meeting_signal import meeting_signal  # noqa: E402
+from meeting_signal import booking_links, meeting_signal  # noqa: E402
 
 HOME = os.path.expanduser("~")
 ENV_FILE = os.environ.get("LINKEDIN_NOTIFY_TOKEN_FILE", os.path.join(HOME, ".claude/channels/discord/.env"))
@@ -72,6 +74,18 @@ def post(text):
     urllib.request.urlopen(req, timeout=15)
 
 
+def link_block(url=None, calendar=(), text=""):
+    """Lines that let Jiv tap straight to the conversation and the calendar, skipping any already in the
+    text. Kept apart from the message so Pushover's 1024 char cap can never cut a link off."""
+    lines = []
+    if url and url not in text:
+        lines.append(f"Conversation: {url}")
+    for link in calendar:
+        if link not in text:
+            lines.append(f"Calendar: {link}")
+    return "\n".join(lines)
+
+
 def pushover_creds():
     """(token, user) from ~/.pushover.env, or None if Pushover is not set up on this machine."""
     try:
@@ -86,7 +100,7 @@ def pushover_creds():
         return None
 
 
-def push(level, text, title=None, url=None):
+def push(level, text, title=None, url=None, links=""):
     """Pushover leg. Returns True sent, False failed, None not applicable (info level or not set up)."""
     if level == "info":
         return None
@@ -97,7 +111,7 @@ def push(level, text, title=None, url=None):
         "token": creds[0] if creds else "dry",
         "user": creds[1] if creds else "dry",
         "title": (title or ("Meeting ready" if level == "meeting" else "Needs you"))[:250],
-        "message": text[:1024],
+        "message": (links + "\n\n" + text)[:1024] if links else text[:1024],
         "priority": "2" if level == "meeting" else "0",
     }
     if level == "meeting":
@@ -105,7 +119,7 @@ def push(level, text, title=None, url=None):
     if url:
         fields.update(url=url[:512], url_title="Open conversation")
     if DRY:
-        print(f"[pushover dry] priority={fields['priority']} {fields['title']}: {text.replace(chr(10), ' | ')[:200]}", flush=True)
+        print(f"[pushover dry] priority={fields['priority']} {fields['title']}: {fields['message'].replace(chr(10), ' | ')[:300]}", flush=True)
         return True
     try:
         req = urllib.request.Request("https://api.pushover.net/1/messages.json",
@@ -134,19 +148,21 @@ def mark_sent(key):
         json.dump(keys, f)
 
 
-def alert(text, level="info", title=None, url=None, key=None):
+def alert(text, level="info", title=None, url=None, key=None, calendar=()):
     """Send one alert on every channel the level calls for. Discord and Pushover fail independently:
     one being down must never swallow the other. Raises only if nothing went out."""
     if key and not DRY and already_sent(key):
         return
+    # info alerts stay plain; needs/meeting carry the links so one tap opens the thread or the calendar.
+    links = link_block(url, calendar, text) if level != "info" else ""
     sent = []
     try:
-        post(text)
+        post(text + ("\n\n" + links if links else ""))
         sent.append(True)
     except Exception as e:
         print(f"[notify] discord failed: {e}", file=sys.stderr, flush=True)
         sent.append(False)
-    pushed = push(level, text, title, url)
+    pushed = push(level, text, title, url, links)
     if pushed is not None:
         sent.append(pushed)
     if not any(sent):
@@ -186,7 +202,8 @@ def main():
         level = flags.get("level", "info")
         if level not in LEVELS:
             raise SystemExit(f"--level must be one of {LEVELS}")
-        alert(flags["text"], level, flags.get("title"), flags.get("url"), flags.get("key"))
+        alert(flags["text"], level, flags.get("title"), flags.get("url"), flags.get("key"),
+              calendar=flags.get("calendar", "").split())
         return
     if not os.path.exists(QUEUE):
         return
@@ -201,9 +218,10 @@ def main():
             level = "meeting" if kind else "needs"
             title = f"LinkedIn meeting: {item.get('name', '?')}" if kind else f"LinkedIn: {item.get('name', '?')}"
             url = item.get("thread_url")
+            calendar = booking_links(item.get("their_message", ""))
         except json.JSONDecodeError:
-            text, level, title, url = "**LinkedIn needs you** (unparseable entry)\n" + lines[i], "needs", None, None
-        alert(text, level, title, url)
+            text, level, title, url, calendar = "**LinkedIn needs you** (unparseable entry)\n" + lines[i], "needs", None, None, []
+        alert(text, level, title, url, calendar=calendar)
         # Advance after each successful post so a failure mid-batch never re-sends.
         with open(STATE, "w") as f:
             f.write(str(i + 1))

@@ -10,7 +10,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "..", "..", "scripts")
 sys.path.insert(0, SCRIPTS)
-from meeting_signal import meeting_signal  # noqa: E402
+from meeting_signal import booking_links, meeting_signal  # noqa: E402
 
 
 def load_notify(**env):
@@ -56,6 +56,19 @@ class Detector(unittest.TestCase):
              "watch a short video from me first: https://www.loom.com/share/c085. Then reply here with a link to "
              "a 2 to 3 minute video of yourself. We watch every video and reply to everyone who sends one.")
         self.assertIsNone(meeting_signal(t))
+
+
+class Links(unittest.TestCase):
+    def test_booking_links_extracted_cleaned_and_deduped(self):
+        self.assertEqual(booking_links("Book here: https://calendly.com/ana/intro."), ["https://calendly.com/ana/intro"])
+        self.assertEqual(booking_links("grab a slot at cal.com/jane/30min, thanks"), ["https://cal.com/jane/30min"])
+        self.assertEqual(booking_links("Join https://meet.google.com/abc-defg-hij or https://us02web.zoom.us/j/123?pwd=x)"),
+                         ["https://meet.google.com/abc-defg-hij", "https://us02web.zoom.us/j/123?pwd=x"])
+        self.assertEqual(booking_links("https://calendly.com/a https://calendly.com/a"), ["https://calendly.com/a"])
+
+    def test_non_booking_urls_and_plain_text_give_nothing(self):
+        for t in ["see https://loom.com/share/x", "call me at 3pm", "email jobs@framesports.ai", "", None]:
+            self.assertEqual(booking_links(t), [], t)
 
 
 class Routing(unittest.TestCase):
@@ -139,6 +152,45 @@ class Routing(unittest.TestCase):
             self.n.alert("x", "meeting", key="k")
         self.assertFalse(self.n.already_sent("k"))  # next run must retry
 
+    def test_needs_alert_carries_conversation_and_calendar_links(self):
+        self.with_pushover(); self.capture_push()
+        self.n.alert("Ana wants to talk", "meeting", "Meeting ready", "https://v2.onlinejobs.ph/message/conversation/abc",
+                     calendar=["https://calendly.com/ana/intro"])
+        self.assertIn("Conversation: https://v2.onlinejobs.ph/message/conversation/abc", self.discord[0])
+        self.assertIn("Calendar: https://calendly.com/ana/intro", self.discord[0])
+        import urllib.parse
+        msg = urllib.parse.unquote_plus(self.pushes[0]["message"])
+        self.assertTrue(msg.startswith("Conversation: https://v2.onlinejobs.ph/message/conversation/abc\nCalendar: https://calendly.com/ana/intro"))
+
+    def test_no_calendar_line_when_there_is_no_calendar(self):
+        self.with_pushover(); self.capture_push()
+        self.n.alert("Marian wants an invite", "meeting", url="https://x.test/c/1")
+        self.assertIn("Conversation: https://x.test/c/1", self.discord[0])
+        self.assertNotIn("Calendar:", self.discord[0])
+
+    def test_info_alert_stays_plain(self):
+        self.n.alert("plain", "info", url="https://x.test/c/1", calendar=["https://calendly.com/a"])
+        self.assertEqual(self.discord, ["plain"])
+
+    def test_link_already_in_text_is_not_repeated(self):
+        self.n.alert("see https://x.test/c/1 and https://calendly.com/a", "needs",
+                     url="https://x.test/c/1", calendar=["https://calendly.com/a"])
+        self.assertNotIn("Conversation:", self.discord[0])
+        self.assertNotIn("Calendar:", self.discord[0])
+
+    def test_long_text_never_cuts_the_links_off_pushover(self):
+        self.with_pushover(); self.capture_push()
+        self.n.alert("x" * 3000, "meeting", url="https://x.test/c/1", calendar=["https://calendly.com/ana/intro"])
+        import urllib.parse
+        msg = urllib.parse.unquote_plus(self.pushes[0]["message"])
+        self.assertLessEqual(len(msg), 1024)
+        self.assertIn("https://calendly.com/ana/intro", msg)
+        self.assertIn("https://x.test/c/1", msg)
+
+    def test_cli_calendar_flag(self):
+        self.assertEqual(self.n.parse_flags(["--text", "t", "--calendar", "https://a.test/x https://b.test/y"])["calendar"].split(),
+                         ["https://a.test/x", "https://b.test/y"])
+
     def test_old_text_calls_unchanged(self):
         self.n.parse_flags  # exists
         self.assertEqual(self.n.parse_flags(["--text", "--looks like a flag but is the text"]),
@@ -151,10 +203,22 @@ class Routing(unittest.TestCase):
         self.n.QUEUE, self.n.STATE = q, os.path.join(self.tmp, "state")
         levels = []
         real = self.n.alert
-        self.n.alert = lambda text, level="info", title=None, url=None, key=None: levels.append((level, title))
+        self.n.alert = lambda text, level="info", title=None, url=None, key=None, calendar=(): levels.append((level, title))
         sys.argv = ["x"]
         self.n.main()
         self.assertEqual(levels, [("meeting", "LinkedIn meeting: Ana")])
+
+    def test_queue_item_passes_the_calendar_link(self):
+        q = os.path.join(self.tmp, "q2.jsonl")
+        with open(q, "w") as f:
+            f.write(json.dumps({"name": "Ana", "thread_url": "https://li/x",
+                                "their_message": "Book a call: https://calendly.com/ana/intro", "why": "x"}) + "\n")
+        self.n.QUEUE, self.n.STATE = q, os.path.join(self.tmp, "state2")
+        got = []
+        self.n.alert = lambda text, level="info", title=None, url=None, key=None, calendar=(): got.append((url, list(calendar)))
+        sys.argv = ["x"]
+        self.n.main()
+        self.assertEqual(got, [("https://li/x", ["https://calendly.com/ana/intro"])])
 
 
 if __name__ == "__main__":
