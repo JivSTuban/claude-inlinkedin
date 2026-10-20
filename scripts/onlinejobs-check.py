@@ -22,13 +22,14 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Shared decision logic and notifier live with the LinkedIn scripts the Mini already deploys.
 SCRIPTS_DIR = os.path.expanduser("~/agent-work/jobi/scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # repo checkout: scripts/ sits beside this file
 import onlinejobs_decide as decide_mod  # noqa: E402
+import onlinejobs_forms as forms_mod  # noqa: E402
 from meeting_signal import booking_links  # noqa: E402
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +41,11 @@ LOCK_FILE   = os.path.join(BASE_DIR, "onlinejobs-check.lock")
 # scheduling emails) still gates job-followup.py and oj-apply.py; this script has its own reply guard
 # (oj-state.json) and was split off 2026-10-19. Create this file to stop only the OnlineJobs reply.
 DISABLE_FILE = os.path.join(BASE_DIR, "onlinejobs-check.disabled")
+# Scoped kill switch for the external-application scan only; replies keep running. Create it to stop the scan.
+FORMS_DISABLE_FILE = os.path.join(BASE_DIR, "onlinejobs-forms.disabled")
+FORMS_SCAN_EVERY_S = 3 * 3600   # new postings land all day, but a scan costs a page load per unseen posting
+FORMS_MAX_FETCH = 80            # unseen postings opened per run; a bigger backlog finishes on the next run
+FORMS_KEEP_DAYS = 14            # a lead nobody acted on in two weeks is stale
 PROFILE_FILE = os.path.join(BASE_DIR, "profile-kb.md")
 FACTS_FILE   = os.path.join(BASE_DIR, "oj-profile-facts.md")   # verified current facts, versioned in the jobi repo
 MAX_THREADS = 25   # inbox rows scanned per run; each costs a page load
@@ -294,6 +300,66 @@ def send_digest(state, now):
         notify_jiv(text, level="info", key=f"oj:digest:{today}")
 
 
+def scan_forms(page, state, now):
+    """Find postings that send the candidate OUT of the site (Google Form, Typeform, ATS page, apply
+    email) and queue them in state["forms"]["leads"] for the /onlinejobs-apply skill, which does the
+    filling. Native postings are autonomousapply.com's job and never queued. Alert-only: this sends
+    nothing to any employer. Never raises: a broken scan must not stop the reply path.
+
+    state["forms"] = {last_scan, seen: {id: [verdict, epoch]}, leads: {id: lead + first_seen/alerted}, fails}
+    """
+    fs = state.setdefault("forms", {})
+    fs.setdefault("seen", {})
+    fs.setdefault("leads", {})
+    if os.path.exists(FORMS_DISABLE_FILE):
+        return
+    if now.timestamp() - fs.get("last_scan", 0) < FORMS_SCAN_EVERY_S:
+        return
+    try:
+        found = {}
+        for kw in forms_mod.SEARCH_KEYWORDS:
+            goto_retry(page, forms_mod.search_url(kw))
+            page.wait_for_timeout(2000)
+            for href in page.eval_on_selector_all("a[href*='/jobseekers/job/']", "els => els.map(e => e.href)"):
+                found.setdefault(forms_mod.posting_id(href), href)
+        fresh = [(i, u) for i, u in found.items() if i not in fs["seen"]]
+        batch, backlog = fresh[:FORMS_MAX_FETCH], max(0, len(fresh) - FORMS_MAX_FETCH)
+        new_leads, skips = [], {}
+        for pid, url in batch:
+            try:
+                goto_retry(page, url)
+                page.wait_for_timeout(900)
+                lead = forms_mod.parse_posting(url, page.inner_text("body"))
+            except Exception as e:
+                log(f"  forms: could not read posting {pid}: {type(e).__name__}")
+                continue
+            ok, why = forms_mod.judge(lead)
+            fs["seen"][pid] = ["lead" if ok else why, now.timestamp()]
+            if ok:
+                lead.update(first_seen=now.timestamp(), alerted=False)
+                fs["leads"][pid] = lead
+            else:
+                skips[why] = skips.get(why, 0) + 1
+        unalerted = [l for l in fs["leads"].values() if not l.get("alerted")]
+        if unalerted and notify_jiv(forms_mod.build_alert(unalerted), level="info", title="OnlineJobs: apply outside the site",
+                                    key=f"oj:forms:{now:%Y-%m-%d-%H}"):
+            for l in unalerted:
+                l["alerted"] = True
+        cutoff = (now - timedelta(days=FORMS_KEEP_DAYS)).timestamp()
+        fs["leads"] = {i: l for i, l in fs["leads"].items() if l["first_seen"] >= cutoff}
+        fs["seen"] = {i: v for i, v in fs["seen"].items() if v[1] >= cutoff - 14 * 86400}
+        if not backlog:
+            fs["last_scan"] = now.timestamp()   # unset while a backlog remains, so the next run continues
+        fs["fails"] = 0
+        log(f"  forms: {len(found)} on page 1, {len(batch)} opened, {len(unalerted)} new lead(s), skipped {skips or 0}, backlog {backlog}")
+    except Exception as e:
+        fs["fails"] = fs.get("fails", 0) + 1
+        log(f"  forms scan error ({fs['fails']}): {type(e).__name__}: {e}")
+        if fs["fails"] >= 3:
+            health(state, now, "forms", f"The OnlineJobs external-form scan failed {fs['fails']} runs in a row ({type(e).__name__}). "
+                                        "Replies are unaffected. The board layout may have changed.")
+
+
 def run():
     global OJ_EMAIL, OJ_PASSWORD, ANTHROPIC_KEY
 
@@ -490,6 +556,7 @@ def run():
             health(state, now, "read", f"The OnlineJobs checker could not open {read_errors} conversations this run. The inbox layout may have changed.")
         if problems:
             health(state, now, "reply", "The OnlineJobs reply step had trouble this run:\n- " + "\n- ".join(problems[:5]))
+        scan_forms(page, state, now)
         send_digest(state, now)
         state["last_run"] = now.timestamp()
         save_state(state)

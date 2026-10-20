@@ -144,6 +144,18 @@ The replies exist to reach a booked meeting. When a conversation gets there, Jiv
 - **Deploy (Mini does not git pull):** `scp scripts/onlinejobs-check.py scripts/oj-profile-facts.md admin@100.98.219.58:Work/job-email-bot/` (the facts file is your local private copy) and `scp scripts/{onlinejobs_decide,meeting_signal,linkedin-notify}.py admin@100.98.219.58:agent-work/jobi/scripts/`.
 - **Tests:** `tests/battle/test_meeting_signal.py` (24: detector, link extraction, notifier routing and links, dedupe, either channel down) and `tests/battle/test_onlinejobs_decide.py` (43: decisions, whole-thread parsing, nudges, draft safety, availability, digest; fixtures shaped like the live pages). No network.
 
+### OnlineJobs external-application discovery (added 2026-10-20)
+
+Most OnlineJobs postings are applied to natively (autonomousapply.com, which spends apply points). A minority send the candidate out of the site to a Google Form, Typeform, an ATS page, or an apply email. Those are free and nobody else was watching for them. First live scan (2026-10-20, five keywords, page 1): **140 postings, 10 with a form link, 8 with only an email, 62 already applied natively**; after the gates, about 3 of the 18 were worth a look.
+
+- **Where it runs:** `scan_forms()` in `scripts/onlinejobs-check.py`, after the inbox pass, every 3 h (`FORMS_SCAN_EVERY_S`), reusing the checker's login. Pure parsing and gating live in `scripts/onlinejobs_forms.py` (no browser; `tests/battle/test_onlinejobs_forms.py`, 22 tests built from the live page shapes). It sends nothing to any employer.
+- **Gates (`judge`):** drops native, closed (deleted page OR the "This job has been closed." banner, 7 of 140 had it), already applied on the site (`Date Applied:`), non-engineering titles (misfit list), and a top wage under **$2,000/month** (hourly x 4 x hours/week; bare number under 300 = hourly, from 15,000 = pesos at 56/USD). An unlisted wage is kept for a human read.
+- **Output:** `oj-state.json` -> `forms.leads` (id, title, employer, wage, `form_url` or `apply_email`, `first_seen`). One Discord DM (info level, no Pushover) lists new leads. Leads expire after 14 days. `forms.seen` stops a posting being opened twice; a first scan opens at most 80 postings per run and finishes the backlog on the next run.
+- **Who applies:** the `/onlinejobs-apply` skill (browser, Google signed in) reads the queue over SSH (`ssh admin@100.98.219.58 "python3 -c ..."` snippet in the skill) instead of re-scanning, fills the form and sends email-applies. The Mini never fills a form.
+- **Not built, on purpose:** feeding EMAIL leads to `linkedin-email.py send`. That sender only trusts a recipient read off the employer's own domain; an address typed into an OnlineJobs description is a different trust call, so it needs its own decision first.
+- **Kill switch:** `touch ~/Work/job-email-bot/onlinejobs-forms.disabled` stops only the scan. Three failed scans in a row send one `needs` health alert; replies are never affected (the scan is wrapped so it cannot raise).
+- **Deploy:** `scp scripts/onlinejobs-check.py admin@100.98.219.58:Work/job-email-bot/` and `scp scripts/onlinejobs_forms.py admin@100.98.219.58:agent-work/jobi/scripts/`.
+
 ### Email-apply for off-LinkedIn job links (added 2026-10-15)
 
 A job link people DM that is not on LinkedIn (a careers page with `Email careers@...`) is now applied to by email from Jiv's Gmail. Chosen by Jiv 2026-10-15: auto-send with hard caps.
