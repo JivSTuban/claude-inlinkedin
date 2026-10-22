@@ -302,33 +302,6 @@ def healthy(state, now, kind):
     decide_mod.health_step(state, kind, False, now)
 
 
-APPLY_HEARTBEAT = os.path.join(BASE_DIR, "apply-runner.heartbeat")   # written over ssh by the MacBook runner each tick
-
-
-def check_apply_runner(state, now):
-    """Dead-man switch for the MacBook's scheduled apply runner: it cannot report that it is asleep, this
-    always-on box can. Discord only, never the phone: a closed lid at 3 AM is not something Jiv can act on.
-    Silent when no heartbeat exists yet. Never raises: it must not stop the reply path."""
-    try:
-        try:
-            beat = float(open(APPLY_HEARTBEAT).read().strip())
-        except (OSError, ValueError):
-            return
-        age = now.timestamp() - beat
-        if not decide_mod.heartbeat_stale(beat, now.timestamp()):
-            healthy(state, now, "apply-runner")
-            return
-        level = decide_mod.health_step(state, "apply-runner", True, now)
-        if level is None:
-            return
-        notify_jiv(f"The MacBook apply runner has been silent for {age / 3600:.0f} hours, so no external applications are "
-                   "going out. Check the lid is open, it is on power and Tailscale is on. Restart it: "
-                   "launchctl kickstart -k gui/$(id -u)/com.jiv.onlinejobs-apply",
-                   level="info", title="OnlineJobs apply runner is silent", key=f"oj:health:apply-runner:{now:%Y-%m-%d-%H}")
-    except Exception as e:
-        log(f"  apply-runner heartbeat check error: {type(e).__name__}: {e}")
-
-
 def send_digest(state, now):
     """Once a day, after 09:00 local, a short Discord summary (info level: no Pushover) of the last 24h and
     what is still open for Jiv. Skipped when there is nothing to say."""
@@ -423,7 +396,6 @@ def run():
 
     state = load_state()
     now = datetime.now()
-    check_apply_runner(state, now)
     log("OnlineJobs.ph check starting...")
 
     try:

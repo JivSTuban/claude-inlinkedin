@@ -17,11 +17,15 @@ import sys
 
 MINI = "admin@100.98.219.58"
 MINI_STATE = "/Users/admin/Work/job-email-bot/oj-state.json"
-APPLIED = os.path.expanduser("~/.claude/skills/onlinejobs-apply/applied.jsonl")
+APPLIED = os.path.join(os.environ.get("OJ_SKILL_DIR") or os.path.expanduser("~/.claude/skills/onlinejobs-apply"), "applied.jsonl")
 
 
 def read_leads(ssh_run=subprocess.run):
-    """Leads the Mini has queued. Raises on any failure so the caller can exit 2."""
+    """Leads the Mini has queued. Raises on any failure so the caller can exit 2. Run ON the Mini (the
+    queue file is local) it reads the file directly; from another machine it goes over SSH."""
+    if os.path.exists(MINI_STATE):
+        with open(MINI_STATE) as f:
+            return list(json.load(f).get("forms", {}).get("leads", {}).values())
     code = f'import json;d=json.load(open("{MINI_STATE}"));print(json.dumps(list(d.get("forms",{{}}).get("leads",{{}}).values())))'
     r = ssh_run(["ssh", "-o", "ConnectTimeout=10", MINI, f"python3 -c '{code}'"],
                 capture_output=True, text=True, timeout=40)

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import onlinejobs_apply_gate as gate  # noqa: E402
 import onlinejobs_decide as decide  # noqa: E402
 
-APPLIED = os.path.expanduser("~/.claude/skills/onlinejobs-apply/applied.jsonl")
+APPLIED = os.path.join(os.environ.get("OJ_SKILL_DIR") or os.path.expanduser("~/.claude/skills/onlinejobs-apply"), "applied.jsonl")
 STATE = os.path.expanduser("~/.onlinejobs-apply/health.json")
 MINI = "admin@100.98.219.58"
 MINI_NOTIFY = "/Users/admin/agent-work/jobi/scripts/linkedin-notify.py"
@@ -66,7 +66,12 @@ def summarize(rows):
 
 
 def send(level, title, text, runner=subprocess.run):
-    """Through the Mini's notifier. Returns True if it went out."""
+    """Through the Mini's notifier. Returns True if it went out. On the Mini itself the notifier is a
+    local file, so no SSH hop."""
+    if os.path.exists(MINI_NOTIFY):
+        r = runner(["python3", MINI_NOTIFY, "--text", text, "--level", level, "--title", title],
+                   capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        return r.returncode == 0
     cmd = f"python3 {MINI_NOTIFY} --text {shlex.quote(text)} --level {level} --title {shlex.quote(title)}"
     r = runner(["ssh", "-o", "ConnectTimeout=10", MINI, cmd], capture_output=True, text=True, timeout=60)
     return r.returncode == 0

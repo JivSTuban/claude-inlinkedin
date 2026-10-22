@@ -1,0 +1,39 @@
+# Codex profile: `onlinejobs-apply` - the unattended hourly OnlineJobs external-application run.
+# Launched by cron on the Mac Mini via scripts/onlinejobs-apply-mini.sh:
+#   codex exec --profile onlinejobs-apply ...
+# Deploy: scp codex/onlinejobs-apply.config.toml admin@100.98.219.58:.codex/
+#
+# Why it is a profile and not the global config: the global config.toml serves the ChatGPT.app
+# automations. Same reasoning as linkedin.config.toml, which this mirrors.
+
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+# Medium, not the global high: the ChatGPT plan quota is shared with the Mini's other automations.
+model_reasoning_effort = "medium"
+
+[sandbox_workspace_write]
+# The run may only write its own state: the tracker, logs and the staged resume. REAL path, no symlinks.
+writable_roots = [
+  "/Users/admin/.onlinejobs-apply",
+]
+network_access = true
+
+# Pre-trust the run's cwd so `codex exec` never stops at "Trust this folder?".
+[projects."/Users/admin/.onlinejobs-apply/state"]
+trust_level = "trusted"
+
+# The browser: real Chrome on a dedicated profile that is signed in to Google (Gmail sends, Google Forms)
+# and OnlineJobs. Kept apart from ~/.linkedin-codex-profile so the two automations never fight over a
+# profile lock. Version pinned so an upstream release cannot break an unattended run; bump deliberately.
+[mcp_servers.onlinejobs-browser]
+command = "/opt/homebrew/bin/npx"
+args = [
+  "-y", "@playwright/mcp@0.0.83",
+  "--user-data-dir", "/Users/admin/.onlinejobs-apply/browser-profile",
+  "--executable-path", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+]
+startup_timeout_sec = 120
+tool_timeout_sec = 120
+# Under approval_policy = "never" Codex denies every MCP tool that is not read-only, so navigate, click and
+# type all fail. Pre-approve this server only; the skill's gates are what limit the applications.
+default_tools_approval_mode = "approve"

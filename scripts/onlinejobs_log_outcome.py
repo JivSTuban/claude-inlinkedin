@@ -16,7 +16,8 @@ import os
 import sys
 from datetime import date
 
-SKILL = os.path.expanduser("~/.claude/skills/onlinejobs-apply")
+# OJ_SKILL_DIR lets the Mini keep its own copy of the tracker; the MacBook default is unchanged.
+SKILL = os.environ.get("OJ_SKILL_DIR") or os.path.expanduser("~/.claude/skills/onlinejobs-apply")
 STATUSES = ("submitted", "sent", "handoff", "skipped", "queued")
 
 

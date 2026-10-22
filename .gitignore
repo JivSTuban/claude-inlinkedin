@@ -25,3 +25,6 @@ __pycache__/
 
 # Private facts the OnlineJobs drafter may use (employer figures); canonical copy lives in the Obsidian vault
 scripts/oj-profile-facts.md
+
+# Private applicant facts for the Mini apply skill (public repo)
+codex/skills/onlinejobs-apply/FACTS.md
