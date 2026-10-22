@@ -79,7 +79,7 @@ OJ_SKILL_DIR=/Users/admin/.onlinejobs-apply/state python3 /Users/admin/agent-wor
 ```
 
 For `--status handoff` the note MUST start with the exact action Jiv has to take, under 150 characters, then the
-reason (example: "Record a 3-7 min intro video, then email it with the resume to jason@mstr.nl. Strong fit, 75.").
+reason (example: "Record a 3-7 min intro video, then email it with the resume to name@company.com. Strong fit, 75.").
 His phone shows only the start of it.
 
 ## Facts you may rely on (never go beyond them)

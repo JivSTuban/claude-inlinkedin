@@ -28,3 +28,16 @@ scripts/oj-profile-facts.md
 
 # Private applicant facts for the Mini apply skill (public repo)
 codex/skills/onlinejobs-apply/FACTS.md
+
+# Credentials and runtime state for the OnlineJobs automation (they live on the Mini, but a copy must never be committable)
+*.env
+claude.env
+login-state.json
+.onlinejobs-login-state.json
+oj-state.json
+applied.jsonl
+TRACKER.md
+last-summary.txt
+leads.jsonl
+*.pem
+*.key

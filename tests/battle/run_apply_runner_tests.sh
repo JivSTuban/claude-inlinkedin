@@ -32,7 +32,7 @@ echo "env key=\${ANTHROPIC_API_KEY:-none} tok=\${CLAUDE_CODE_OAUTH_TOKEN:-none}"
 exit 0
 E
   chmod +x "$T/login" "$T/claude"
-  OJ_PY=python3 OJ_CLAUDE_BIN="$T/claude" OJ_LOGIN_BIN="$T/login" ANTHROPIC_API_KEY=sk-should-be-dropped \
+  OJ_PY=python3 OJ_CLAUDE_BIN="$T/claude" OJ_LOGIN_BIN="$T/login" ANTHROPIC_API_KEY=stray-key-must-be-dropped \
     bash "$RUNNER" --leads "$T/leads.jsonl" > "$T/out" 2>&1
   RC=$?
 }

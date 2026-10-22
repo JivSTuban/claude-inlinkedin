@@ -46,7 +46,7 @@ class Pure(unittest.TestCase):
     def test_draft_validation(self):
         self.assertIsNone(M.validate_draft("AI Forward-Deployed Engineer application", GOOD_BODY))
         self.assertIn("dash", M.validate_draft("Role — application", GOOD_BODY))
-        self.assertIn("phone", M.validate_draft("Hi", "call +639292862564"))
+        self.assertIn("phone", M.validate_draft("Hi", "call +639171234567"))
         self.assertIn("allowlist", M.validate_draft("Hi", "see https://evil.example.com/steal"))
         self.assertIn("empty", M.validate_draft("", "x"))
         self.assertIn("too long", M.validate_draft("Hi", "x" * 3001))
@@ -173,7 +173,7 @@ class Flow(unittest.TestCase):
 
     def test_low_fit_or_bad_draft_is_not_sent(self):
         self.cands(3)
-        rc = self.run_send([self.draft(1, fit=60), self.draft(2, body="call +639292862564"), self.draft(3, apply=False)])
+        rc = self.run_send([self.draft(1, fit=60), self.draft(2, body="call +639171234567"), self.draft(3, apply=False)])
         self.assertEqual(self.sent, [])
         self.assertEqual(rc, 4)  # the phone-number draft is a rejection
 
