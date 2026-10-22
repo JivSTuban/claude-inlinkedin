@@ -41,3 +41,10 @@ last-summary.txt
 leads.jsonl
 *.pem
 *.key
+
+# Personal research and scan output, not part of the project
+REFERRAL-TARGETS.md
+REMOTE-JOBS-RESEARCH.md
+REMOTE-OUTREACH-PLAYBOOK.md
+*-scan.json
+rok-fullstack.json
