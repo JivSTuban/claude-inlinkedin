@@ -51,6 +51,16 @@ class TestParsing(unittest.TestCase):
             self.assertEqual(f.parse_posting(URL, posting("Backend Engineer", "$3000/month", f"Apply {link}"))["method"],
                              "FORM", link)
 
+    def test_link_shorteners_count_as_a_form_link(self):
+        # A Technical Delivery Manager post carried a bit.ly form and was judged native (2026-10-22).
+        for link in ("https://bit.ly/3xYzAbC", "https://tinyurl.com/yc8x2abc", "https://forms.office.com/r/AbC123"):
+            lead = f.parse_posting(URL, posting("Backend Engineer", "$3000/month", f"Apply here {link}."))
+            self.assertEqual((lead["method"], lead["form_url"]), ("FORM", link), link)
+
+    def test_a_shortener_lookalike_host_is_not_a_form(self):
+        lead = f.parse_posting(URL, posting("Backend Engineer", "$3000/month", "See notbit.ly/abc or xtinyurl.com/q for our blog"))
+        self.assertEqual(lead["method"], "native")
+
     def test_email_only_posting(self):
         lead = f.parse_posting(URL, EMAIL_ROLE)
         self.assertEqual((lead["method"], lead["apply_email"]), ("EMAIL", "jobs@framesports.ai"))
@@ -173,7 +183,9 @@ class TestSearchPlan(unittest.TestCase):
         self.assertEqual(len(plan), len(set(plan)))                       # nothing scanned twice
         for kw in f.SEARCH_KEYWORDS + f.EXTRA_KEYWORDS:
             self.assertIn((kw, 0), plan)
-        self.assertEqual([k for k, o in plan if o == 30], f.SEARCH_KEYWORDS[:3])
+        self.assertEqual([k for k, o in plan if o == 30], f.SEARCH_KEYWORDS[:3] + ["developer", "engineer"])
+        for kw in ("developer", "engineer", "node js", "nodejs"):         # the blind spots found 2026-10-22
+            self.assertIn((kw, 0), plan)
         self.assertIn("/jobsearch/30?", f.search_url("ai engineer", 30))
 
 

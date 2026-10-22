@@ -18,7 +18,12 @@ SEARCH_KEYWORDS = ["full stack developer", "ai engineer", "web developer", "auto
 # broadest ones, widen it. Only UNSEEN postings are opened, so the cost stays bounded by new postings.
 EXTRA_KEYWORDS = ["backend developer", "frontend developer", "react developer", "node.js developer",
                   "python developer", "ai automation", "n8n", "typescript"]
-SECOND_PAGE_FOR = SEARCH_KEYWORDS[:3]
+# Measured 2026-10-22 on the live board: the 16 pages above saw 395 postings, and these added ~190 more that
+# none of them reach. "node js" alone added 29 because the board matches words, so "node.js developer" does not
+# find "Node JS Full Stack" (the NoStack Node.js/TypeScript role was never in the seen set). Plain "developer" and
+# "engineer" are the broadest titles; a second page of each added 31 more.
+EXTRA_KEYWORDS += ["developer", "engineer", "node js", "nodejs", "software engineer", "programmer", "javascript"]
+SECOND_PAGE_FOR = SEARCH_KEYWORDS[:3] + ["developer", "engineer"]
 SECOND_PAGE_OFFSET = 30     # pagination is a path offset, 30 per page
 
 
@@ -35,13 +40,18 @@ PESO_AMOUNT_FROM = 15000
 
 # Form hosts that mean "applying happens off the site". Greenhouse/Lever/Ashby/Workable are ATS pages.
 _FORM_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?("
+    # The lookbehind keeps "notbit.ly/x" or "me@tally.so/x" from matching mid-word.
+    r"(?<![\w@.-])(?:https?://)?(?:www\.)?("
     r"forms\.gle/[\w-]+"
     r"|docs\.google\.com/forms/[^\s\"'<>)]+"
     r"|[\w.-]*typeform\.com/[^\s\"'<>)]+"
     r"|tally\.so/[^\s\"'<>)]+"
     r"|[\w.-]*jotform\.com/[^\s\"'<>)]+"
     r"|airtable\.com/(?:app|shr)[^\s\"'<>)]+"
+    r"|forms\.office\.com/[^\s\"'<>)]+"
+    # Link shorteners hide the real form (a bit.ly post was judged "native" on 2026-10-22 and never queued). The
+    # target is unknown here, so it is queued as a form and the apply run opens it and applies its own gates.
+    r"|(?:bit\.ly|tinyurl\.com|t\.ly|cutt\.ly|rb\.gy|shorturl\.at|ow\.ly)/[\w-]+"
     r"|[\w.-]*(?:greenhouse\.io|lever\.co|ashbyhq\.com|workable\.com|breezy\.hr|recruitee\.com)/[^\s\"'<>)]+"
     r")",
     re.I,
