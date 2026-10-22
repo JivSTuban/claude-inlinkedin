@@ -198,11 +198,18 @@ async function ensureLoggedIn(page, opts = {}) {
  * (device checks, 2-step), so unlike OnlineJobs this is detect-and-tell, not re-login. A Google session
  * in a profile that is used regularly lasts months, so the realistic failure is rare but silent: Gmail
  * sends and sign-in-gated Google Forms would fail mid-lead. Probing first turns that into one clear alert.
+ *
+ * Positive evidence only: signed in means the browser STAYED on the probe's own host and is not on a sign-in or
+ * "about" page. Recognising only the sign-in page was not enough: a profile with no Google cookies at all is sent
+ * from myaccount.google.com to www.google.com/account/about, which the old check called signed in (2026-10-23).
  */
 async function googleSignedIn(page) {
   await page.goto(GOOGLE_PROBE, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
   await page.waitForTimeout(1500).catch(() => {});
-  return !/accounts\.google\.com\/(v\d\/)?(signin|ServiceLogin|AccountChooser)|\/signin\/|identifier/i.test(page.url());
+  let final;
+  try { final = new URL(page.url()); } catch { return false; }
+  if (final.hostname !== new URL(GOOGLE_PROBE).hostname) return false;
+  return !/(signin|ServiceLogin|AccountChooser|identifier|\/account\/about)/i.test(final.pathname);
 }
 
 const EXIT = { already: 0, logged_in: 0, needs_human: 3, signed_out: 4, no_credentials: 5, rejected: 5, throttled: 6, google_signed_out: 7 };

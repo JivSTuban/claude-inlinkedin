@@ -53,6 +53,10 @@ const srv = http.createServer((q, r) => {
   }
   if (q.url.startsWith('/g/in')) { r.end('<html>account</html>'); return; }
   if (q.url.startsWith('/g/out')) { r.writeHead(302, { Location: '/signin/v2/identifier' }); r.end(); return; }
+  // A profile with no Google cookies at all: myaccount.google.com sends it to the www.google.com/account/about
+  // marketing page, another host. localhost vs the 127.0.0.1 base stands in for that host change.
+  if (q.url.startsWith('/g/nocookies')) { r.writeHead(302, { Location: `http://localhost:${srv.address().port}/account/about/` }); r.end(); return; }
+  if (q.url.startsWith('/account/about')) { r.end('<html>Learn more about Google accounts</html>'); return; }
   if (q.url.startsWith('/signin/')) { r.end('<html>Sign in to Google</html>'); return; }
   if (q.url.startsWith('/recaptcha')) { r.end('<html>captcha frame</html>'); return; }
   if (q.method === 'POST') {
@@ -153,6 +157,9 @@ const good = { ONLINEJOBS_EMAIL: EMAIL, ONLINEJOBS_PASSWORD: PW };
   t('--google while signed out of Google: exit 7, nothing posted', () => { assert.strictEqual(h.rc, 7, h.out); assert.match(h.out, /google_signed_out/); assert.strictEqual(n0(), h0); });
   const h2 = await run({ args: ['--google'], profile: a.profile, state: a.state, vars: { ...good, GOOGLE_PROBE_URL: base + '/g/in' } });
   t('--google while signed in to Google: exit 0', () => { assert.strictEqual(h2.rc, 0, h2.out); });
+  // 2026-10-23: a cookieless profile landed on the account/about page and the old check called it signed in.
+  const h3 = await run({ args: ['--google'], profile: a.profile, state: a.state, vars: { ...good, GOOGLE_PROBE_URL: base + '/g/nocookies' } });
+  t('--google with no Google cookies (redirected to the about page on another host): exit 7', () => { assert.strictEqual(h3.rc, 7, h3.out); });
 
   srv.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall passed');
