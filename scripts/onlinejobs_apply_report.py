@@ -58,8 +58,10 @@ def summarize(rows):
         out.append(("info", "OnlineJobs: applied", head + "\n" + "\n".join(lines)))
     for r in rows:
         if r.get("status") == "handoff":
-            why = decide.tidy(r.get("next") or "needs you to finish it", 160)
-            out.append(("needs", "OnlineJobs: finish an application", f"{_name(r)}: {why}"))
+            # Action first: the note starts with what Jiv must do (the runner prompt requires it), and the
+            # role comes after, so a phone that cuts the message still shows the action.
+            why = decide.tidy(r.get("next") or "finish it by hand", 260)
+            out.append(("needs", "OnlineJobs: you need to act", f"{why}\nRole: {_name(r)}"))
     return out
 
 

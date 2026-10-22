@@ -331,8 +331,8 @@ def scan_forms(page, state, now):
         return
     try:
         found = {}
-        for kw in forms_mod.SEARCH_KEYWORDS:
-            goto_retry(page, forms_mod.search_url(kw))
+        for kw, offset in forms_mod.search_plan():
+            goto_retry(page, forms_mod.search_url(kw, offset))
             page.wait_for_timeout(2000)
             for href in page.eval_on_selector_all("a[href*='/jobseekers/job/']", "els => els.map(e => e.href)"):
                 found.setdefault(forms_mod.posting_id(href), href)

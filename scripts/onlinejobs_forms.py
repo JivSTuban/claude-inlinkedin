@@ -13,6 +13,19 @@ import re
 from urllib.parse import quote
 
 SEARCH_KEYWORDS = ["full stack developer", "ai engineer", "web developer", "automation", "software developer"]
+# Measured 2026-10-22: five keywords on page 1 saw 337 postings in 1.8 days and queued 5 (1 real fit), so
+# the runner had almost nothing to apply to. More titles Jiv is qualified for, and a second page for the
+# broadest ones, widen it. Only UNSEEN postings are opened, so the cost stays bounded by new postings.
+EXTRA_KEYWORDS = ["backend developer", "frontend developer", "react developer", "node.js developer",
+                  "python developer", "ai automation", "n8n", "typescript"]
+SECOND_PAGE_FOR = SEARCH_KEYWORDS[:3]
+SECOND_PAGE_OFFSET = 30     # pagination is a path offset, 30 per page
+
+
+def search_plan():
+    """[(keyword, offset)] to scan: page 1 of every keyword, plus page 2 of the broadest few."""
+    return ([(kw, 0) for kw in SEARCH_KEYWORDS + EXTRA_KEYWORDS]
+            + [(kw, SECOND_PAGE_OFFSET) for kw in SECOND_PAGE_FOR])
 
 # Jiv's floor in USD per month. Below it the role is a skip, same rule as the apply skill.
 RATE_FLOOR_MONTHLY = 2000
@@ -119,9 +132,21 @@ def _wage_line(text):
 def monthly_usd(wage, hours_per_week=40):
     """Best monthly figure the posting offers, or None when the line has no number we trust.
     Takes the TOP of a range: the floor test is "can this ever reach my rate", not "is the low end ok".
-    Currencies other than USD are treated as USD; the gate is a coarse filter, not a quote."""
+    Currencies other than USD are treated as USD; the gate is a coarse filter, not a quote.
+
+    A line can state the same pay twice in different units ("$5 USD/hour ($100/week at 20 hours)").
+    Each clause is read with ITS OWN unit; reading the biggest number against the first unit turned
+    $100/week into $16,000/month and queued a $400/month job (2026-10-22)."""
     if not wage:
         return None
+    clauses = [c for c in re.split(r"[()]|;|\bor\b", wage) if re.search(r"\d", c)]
+    if len(clauses) > 1:
+        figures = [f for f in (_clause_monthly(c, hours_per_week) for c in clauses) if f is not None]
+        return max(figures) if figures else None
+    return _clause_monthly(wage, hours_per_week)
+
+
+def _clause_monthly(wage, hours_per_week=40):
     nums = [float(n.replace(",", "")) for n in re.findall(r"(\d[\d,]*(?:\.\d+)?)", wage)]
     nums = [n for n in nums if n > 0]
     if not nums:

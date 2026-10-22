@@ -33,7 +33,7 @@ class Summarize(unittest.TestCase):
         out = r.summarize([row("handoff", "ML Engineer", "Beta", "Google sign-in expired. Re-login in the browser.")])
         self.assertEqual(out[0][0], "needs")
         self.assertIn("ML Engineer at Beta", out[0][2])
-        self.assertIn("Google sign-in expired.", out[0][2])
+        self.assertTrue(out[0][2].startswith("Google sign-in expired."))     # the action leads, the role follows
 
     def test_unnamed_employer_placeholder_is_not_printed(self):
         out = r.summarize([row("submitted", "Software Engineer", "(not named; form: Software Engineer)")])

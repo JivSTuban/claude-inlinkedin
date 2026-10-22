@@ -64,7 +64,7 @@ PROMPT="/onlinejobs-apply
 
 Scheduled headless run. Work ONLY these queued leads (already deduped against applied.jsonl). Skip Discovery and the batch-scan. Apply the fit, honesty, rate and misfit gates to each. Log EVERY outcome, skips included, by running this command and nothing else (you have no permission to edit the tracker files directly; it writes applied.jsonl and TRACKER.md together):
 python3 $HERE/onlinejobs_log_outcome.py --url <posting url> --title <real title from the live page> --status <submitted|sent|handoff|skipped> --fit <0-100> --note <one line why> [--employer <name>] [--method form|email] [--form-url <url>] [--email <address>]
-A lead is not done until that command has run for it. If the posting page does not match the queued lead, trust the live page and say so in --note. Stop when every lead is logged.
+For --status handoff the note MUST begin with the exact action Jiv has to take, under 150 characters, then the reason (for example: Record a 60 second intro video, then email it with resume (2).pdf to name@company.com. Strong fit, 82.). His phone shows only the start of it. A lead is not done until that command has run for it. If the posting page does not match the queued lead, trust the live page and say so in --note. Stop when every lead is logged.
 
 $(cat "$LEADS")"
 

@@ -148,6 +148,35 @@ class TestJudge(unittest.TestCase):
                          (False, "applied_on_site"))
 
 
+class TestWageClauses(unittest.TestCase):
+    def test_same_pay_stated_in_two_units_is_read_per_clause(self):
+        # 100 x hourly was $16,000/month; it is $5/hr = $800 or $100/week = $400.
+        self.assertEqual(f.monthly_usd("$5 USD/hour ($100/week at 20 hours)"), 800)
+        self.assertEqual(f.monthly_usd("$100/week at 20 hours"), 400)
+
+    def test_single_clause_wages_are_unchanged(self):
+        self.assertEqual(f.monthly_usd("$12-25/hr"), 25 * 160)
+        self.assertAlmostEqual(f.monthly_usd("PHP 100,000 - PHP 140,000"), 140000 / f.PESO_PER_USD)
+        self.assertEqual(f.monthly_usd("$3000/month"), 3000)
+        self.assertEqual(f.monthly_usd("1-20"), 20 * 160)
+        self.assertIsNone(f.monthly_usd("Negotiable"))
+
+    def test_a_low_hourly_with_a_weekly_note_is_below_the_floor(self):
+        t = posting("Base44 Web Developer & Technical Support | Part-Time", "$5 USD/hour ($100/week at 20 hours)",
+                    "Send applications to saige.radke@junkpunks.com", hours="20")
+        self.assertEqual(f.judge(f.parse_posting(URL, t)), (False, "below_rate_floor"))
+
+
+class TestSearchPlan(unittest.TestCase):
+    def test_every_keyword_page_one_and_page_two_for_the_broadest(self):
+        plan = f.search_plan()
+        self.assertEqual(len(plan), len(set(plan)))                       # nothing scanned twice
+        for kw in f.SEARCH_KEYWORDS + f.EXTRA_KEYWORDS:
+            self.assertIn((kw, 0), plan)
+        self.assertEqual([k for k, o in plan if o == 30], f.SEARCH_KEYWORDS[:3])
+        self.assertIn("/jobsearch/30?", f.search_url("ai engineer", 30))
+
+
 class TestMisfitRegressions(unittest.TestCase):
     """Both were queued and alerted on 2026-10-21/22 before being skipped by hand."""
     def test_titles_that_passed_only_on_a_stray_ai_or_engineer(self):
