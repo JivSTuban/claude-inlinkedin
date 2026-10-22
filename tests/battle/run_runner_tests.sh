@@ -136,6 +136,28 @@ chk '[ $RC -eq 5 ] && [ $ELAPSED -lt 30 ]' "dead codex: exit 5 in seconds, not t
 chk '[ -e "$SHIMS/dead-version-called" ] && [ ! -e "$SHIMS/dead-run-called" ]' "dead codex: preflight ran, the real run never started"
 chk '[ $(grep -c "notify dry\] LinkedIn inbox run on the Mini failed (exit 5, RUN_STATUS=blocked:codex_unresponsive" "$LOGF") -eq 1 ]' "dead codex: alert names codex_unresponsive"
 
+# 5b3. Targeting audit: an outreach run whose tracker shows a NEW connection request to a Philippines-based
+#      prospect alerts once (the foreign-founder rule lives in the skill, a prompt, so code checks the result).
+#      A fake Codex writes the row, like the real one would after sending.
+cat > "$SHIMS/codex-sends-ph" <<'SH'
+#!/bin/bash
+[ "$1" = --version ] && { echo codex-cli shim; exit 0; }
+O=""; A=("$@"); for i in "${!A[@]}"; do [ "${A[$i]}" = "-o" ] && O="${A[$((i+1))]}"; done
+python3 - "$LINKEDIN_TEST_DIR/linkedin-outreach-tracker.json" <<'PY'
+import json, sys, datetime
+now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+json.dump({"prospects": [{"name": "Pia Cebu", "linkedin_url": "https://www.linkedin.com/in/pia/", "status": "connection_requested",
+  "last_action_at": now, "prospect_type": "founder", "location": "Metro Cebu", "hire_signal": "hiring"}]}, open(sys.argv[1], "w"))
+PY
+echo "done. RUN_STATUS=ok" > "$O"
+SH
+chmod +x "$SHIMS/codex-sends-ph"
+fresh target
+LINKEDIN_CODEX_BIN="$SHIMS/codex-sends-ph" run outreach >/dev/null 2>&1
+chk '[ $(grep -c "notify dry\] LinkedIn outreach broke the foreign-founder rule" "$LOGF") -eq 1 ] && grep -q "Philippines" "$LOGF"' "targeting audit: a Philippines-based invitation alerts"
+LINKEDIN_CODEX_BIN="$SHIMS/codex-sends-ph" run outreach >/dev/null 2>&1
+chk '[ $(grep -c "notify dry\] LinkedIn outreach broke the foreign-founder rule" "$LOGF") -eq 1 ]' "targeting audit: alerts only once per day"
+
 # 5c. inbox reader paths that must never spend quota: login wall and an empty inbox
 printf '#!/bin/bash\nexit 3\n' > "$SHIMS/inbox-wall"
 printf '#!/bin/bash\n[ "$1" = read ] && echo %s > "$3"\nexit 0\n' "'{\"threads\":[]}'" > "$SHIMS/inbox-empty"

@@ -46,6 +46,7 @@ APPLY_BIN="${LINKEDIN_APPLY_BIN:-node $SCRIPT_DIR/linkedin-apply.js}"
 EMAIL_BIN="${LINKEDIN_EMAIL_BIN:-python3 $SCRIPT_DIR/linkedin-email.py}"
 MAX_SECONDS="${LINKEDIN_MAX_SECONDS:-2700}"   # 45 min cap; macOS has no `timeout`, so perl alarm below
 TODAY=$(date +%Y-%m-%d)
+RUN_START=$(date +%s)   # the targeting audit below only looks at invitations sent after this
 
 if [ -n "$TEST_DIR" ]; then
     OUTREACH_DIR="$TEST_DIR"
@@ -63,6 +64,7 @@ fi
 STAMP_FILE="$STATE_DIR/.linkedin_codex_last_run"   # outreach: one success per day
 ALERT_FILE="$STATE_DIR/.linkedin_codex_alerted"    # failure alerts: one DM per day
 DASH_ALERT_FILE="$STATE_DIR/.linkedin_dash_alerted"
+TARGET_ALERT_FILE="$STATE_DIR/.linkedin_target_alerted"
 BLOCKED_FILE="$STATE_DIR/.linkedin_codex_blocked_until"   # epoch; set when ChatGPT quota runs out
 LOG="$LOG_DIR/$TODAY.log"
 
@@ -349,6 +351,18 @@ if [ -n "$DASHED" ] && [ -z "$DRY_RUN" ] && [ "$(cat "$DASH_ALERT_FILE" 2>/dev/n
     echo "[$(date)] $MODE: em/en-dash found in: $DASHED"
     python3 "$SCRIPT_DIR/linkedin-notify.py" --text "Codex wrote an em/en-dash in LinkedIn text on the Mini (in: $DASHED). Check $OUTREACH_DIR." \
         && echo "$TODAY" > "$DASH_ALERT_FILE"
+fi
+
+# Targeting: new invitations must go to foreign founders (skill, Autonomous Outreach Gate). The skill is a prompt,
+# so this reads the tracker afterwards and alerts on a Philippines-based or non-founder recipient. Once a day.
+if [ "$MODE" = outreach ] && [ -z "$DRY_RUN" ]; then
+    TARGET_BAD=$(python3 "$SCRIPT_DIR/linkedin-outreach-audit.py" --tracker "$OUTREACH_DIR/linkedin-outreach-tracker.json" --since "$RUN_START" 2>&1)
+    TARGET_RC=$?
+    if [ $TARGET_RC -ne 0 ] && [ "$(cat "$TARGET_ALERT_FILE" 2>/dev/null)" != "$TODAY" ]; then
+        echo "[$(date)] $MODE: targeting audit rc=$TARGET_RC: $TARGET_BAD"
+        python3 "$SCRIPT_DIR/linkedin-notify.py" --text "LinkedIn outreach broke the foreign-founder rule: $(echo "$TARGET_BAD" | head -3 | cut -c1-200 | tr '\n' ';')" \
+            && echo "$TODAY" > "$TARGET_ALERT_FILE"
+    fi
 fi
 
 if grep -q "linkedin_session_expired" "$SUMMARY" 2>/dev/null; then
