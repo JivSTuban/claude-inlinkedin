@@ -237,7 +237,7 @@ def send_reply(page, url, reply_text):
 
 STANDING_FACTS = (
     "Standing facts you may use when asked (never invent others): full-time, 40 hours a week, any timezone, "
-    "can start immediately; rate expectation $2,000 to $4,000 per month (about $12 to $25 per hour), open to a "
+    "can start immediately; rate expectation $1,000 to $4,000 per month (about $6 to $25 per hour, higher for more senior scope), open to a "
     "fixed price or a paid trial; internet 50 Mbps down and 163 Mbps up; based in Lapu-Lapu City, Cebu, Philippines."
 )
 

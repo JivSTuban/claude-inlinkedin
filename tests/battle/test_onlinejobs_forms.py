@@ -121,7 +121,7 @@ class TestJudge(unittest.TestCase):
         self.assertEqual(self.verdict(EMAIL_ROLE), (True, ""))
 
     def test_below_rate_floor_skips(self):
-        t = posting("Senior AI and Full-Stack Software Developer", "$10–$12/hr", "https://forms.gle/JZT7GhjDKA4W4VhG8")
+        t = posting("Senior AI and Full-Stack Software Developer", "$5–$6/hr", "https://forms.gle/JZT7GhjDKA4W4VhG8")
         self.assertEqual(self.verdict(t), (False, "below_rate_floor"))
 
     def test_peso_wage_below_the_floor_skips(self):

@@ -28,7 +28,7 @@ def search_plan():
             + [(kw, SECOND_PAGE_OFFSET) for kw in SECOND_PAGE_FOR])
 
 # Jiv's floor in USD per month. Below it the role is a skip, same rule as the apply skill.
-RATE_FLOOR_MONTHLY = 2000
+RATE_FLOOR_MONTHLY = 1000   # lowered from 2000 by Jiv, 2026-10-22
 HOURS_PER_MONTH = 160    # 40 h/week, used only to turn an hourly wage into a monthly one
 PESO_PER_USD = 56        # coarse; the floor test does not need more (P40-50k is about $700-900)
 PESO_AMOUNT_FROM = 15000
