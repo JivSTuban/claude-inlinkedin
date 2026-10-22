@@ -46,6 +46,14 @@ const page = (extra = '') => `<html><body><h1>Log in</h1>${extra}<form method="p
 <button type="submit">Log in</button></form></body></html>`;
 const srv = http.createServer((q, r) => {
   const cookie = /oj=1/.test(q.headers.cookie || '');
+  if (q.url.startsWith('/jobseekers/jobsearch')) {
+    r.end(cookie ? '<html><body><nav><a>Messages</a> <a>JOB BOARD</a> <a>Account</a></nav><p>jobs</p></body></html>'
+      : '<html><body><nav><a href="/login">LOG IN</a> <a>SIGN UP</a></nav><p>jobs</p></body></html>');
+    return;
+  }
+  if (q.url.startsWith('/g/in')) { r.end('<html>account</html>'); return; }
+  if (q.url.startsWith('/g/out')) { r.writeHead(302, { Location: '/signin/v2/identifier' }); r.end(); return; }
+  if (q.url.startsWith('/signin/')) { r.end('<html>Sign in to Google</html>'); return; }
   if (q.url.startsWith('/recaptcha')) { r.end('<html>captcha frame</html>'); return; }
   if (q.method === 'POST') {
     let b = '';
@@ -78,7 +86,7 @@ function run(env) {
     ONLINEJOBS_ENV_FILE: '/nonexistent', ...env.vars,
   };
   return new Promise((resolve) => {
-    const p = spawn('node', [path.join(__dirname, '..', '..', 'scripts', 'onlinejobs-ensure-login.js')], { env: e });
+    const p = spawn('node', [path.join(__dirname, '..', '..', 'scripts', 'onlinejobs-ensure-login.js'), ...(env.args || [])], { env: e });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
@@ -125,6 +133,26 @@ const good = { ONLINEJOBS_EMAIL: EMAIL, ONLINEJOBS_PASSWORD: PW };
   const f0 = n0();
   const f = await run({ state: stateFile, vars: good });
   t('two attempts in the last hour: throttled, exit 6, nothing posted', () => { assert.strictEqual(f.rc, 6, f.out); assert.strictEqual(n0(), f0); });
+
+  // The older v2 site detects a dead session by the /message redirect instead of reading the nav.
+  const v0 = n0();
+  const v = await run({ vars: { ...good, ONLINEJOBS_SITE: 'v2' } });
+  t('v2 site: logged out + good credentials signs in once', () => { assert.strictEqual(v.rc, 0, v.out); assert.match(v.out, /logged_in/); assert.strictEqual(n0(), v0 + 1); });
+
+  // --check never types: signed out is exit 4 with nothing posted, a live session is exit 0.
+  const g0 = n0();
+  const g = await run({ args: ['--check'], vars: good });
+  t('--check while signed out: exit 4, nothing typed or posted', () => { assert.strictEqual(g.rc, 4, g.out); assert.match(g.out, /signed_out/); assert.strictEqual(n0(), g0); });
+  const g2 = await run({ args: ['--check'], profile: a.profile, state: a.state, vars: good });
+  t('--check with a live session: exit 0', () => { assert.strictEqual(g2.rc, 0, g2.out); assert.match(g2.out, /already/); });
+
+  // --google is detect-only: a profile bounced to the Google sign-in page is exit 7, never a typed password.
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const h0 = n0();
+  const h = await run({ args: ['--google'], profile: a.profile, state: a.state, vars: { ...good, GOOGLE_PROBE_URL: base + '/g/out' } });
+  t('--google while signed out of Google: exit 7, nothing posted', () => { assert.strictEqual(h.rc, 7, h.out); assert.match(h.out, /google_signed_out/); assert.strictEqual(n0(), h0); });
+  const h2 = await run({ args: ['--google'], profile: a.profile, state: a.state, vars: { ...good, GOOGLE_PROBE_URL: base + '/g/in' } });
+  t('--google while signed in to Google: exit 0', () => { assert.strictEqual(h2.rc, 0, h2.out); });
 
   srv.close();
   console.log(fails ? `\n${fails} FAILED` : '\nall passed');

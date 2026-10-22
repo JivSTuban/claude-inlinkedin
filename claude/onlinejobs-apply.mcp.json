@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "onlinejobs-browser": {
+      "command": "/opt/homebrew/bin/npx",
+      "args": [
+        "-y", "@playwright/mcp@0.0.83",
+        "--user-data-dir", "/Users/admin/.onlinejobs-apply/browser-profile",
+        "--executable-path", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      ]
+    }
+  }
+}

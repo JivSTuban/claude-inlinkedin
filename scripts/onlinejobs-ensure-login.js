@@ -18,22 +18,33 @@
 //   - a rejected password writes a cooldown (REJECT_COOLDOWN_H) and is never retried before it ends;
 //   - a captcha, verification code or changed form stops with exit 3 and asks for a human.
 //
-// Exit codes: 0 logged in, 3 needs a human (captcha / verification / form changed),
-//             5 credentials missing or rejected, 6 throttled (too many recent attempts).
+// Flags: --check  never sign in, only report (exit 4 when signed out);
+//        --google also require the profile to be signed in to Google (exit 7 when not; never types there).
+// Exit codes: 0 logged in, 3 needs a human (captcha / verification / form changed), 4 signed out (--check),
+//             5 credentials missing or rejected, 6 throttled (too many recent attempts), 7 Google signed out.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const BASE = (process.env.ONLINEJOBS_BASE || 'https://v2.onlinejobs.ph').replace(/\/$/, '');
+// Two separate origins with separate sessions (they do not share cookies). The apply job reads postings on
+// `www`, where an external form link is hidden behind "Please login or register", so `www` is the default.
+// `v2` is the newer messaging site the inbox checker uses.
+const SITE = process.env.ONLINEJOBS_SITE === 'v2' ? 'v2' : 'www';
+const BASE = (process.env.ONLINEJOBS_BASE || (SITE === 'v2' ? 'https://v2.onlinejobs.ph' : 'https://www.onlinejobs.ph')).replace(/\/$/, '');
 const PROFILE = process.env.ONLINEJOBS_PROFILE || path.join(os.homedir(), '.onlinejobs-profile');
 const STATE_FILE = process.env.ONLINEJOBS_STATE_FILE || path.join(os.homedir(), '.onlinejobs-login-state.json');
 const CHROME = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const MAX_ATTEMPTS_PER_HOUR = 2;
 const REJECT_COOLDOWN_H = 6;
-// A page behind the login: redirects to /login when the session is gone.
+// v2: /message redirects to /login when the session is gone.
 const CHECK_PATH = '/message';
+// www: no page redirects, so read the nav instead. /jobseekers/jobsearch renders for guests too, with a
+// "LOG IN" link; signed in it shows Messages + Account and no such link (measured 2026-10-22).
+const WWW_CHECK_PATH = '/jobseekers/jobsearch';
+// A page that bounces to accounts.google.com/signin when the profile is signed out.
+const GOOGLE_PROBE = process.env.GOOGLE_PROBE_URL || 'https://myaccount.google.com/';
 
 const log = (...a) => console.log('[onlinejobs-login]', ...a);
 
@@ -101,6 +112,16 @@ async function onLoginPage(page) {
 }
 
 async function isLoggedIn(page) {
+  if (SITE === 'www') {
+    await page.goto(BASE + WWW_CHECK_PATH, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+    await page.waitForTimeout(1500).catch(() => {});
+    // Both signals, so a Cloudflare challenge or error page (neither nav present) never reads as signed in.
+    return page.evaluate(() => {
+      const guestLink = [...document.querySelectorAll('a,button')].some((a) => /^\s*log ?in\s*$/i.test(a.innerText));
+      const t = document.body ? document.body.innerText : '';
+      return !guestLink && /\bMessages\b/.test(t) && /\bAccount\b/.test(t);
+    }).catch(() => false);
+  }
   await page.goto(BASE + CHECK_PATH, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
   await page.waitForTimeout(1500).catch(() => {});
   return !(await onLoginPage(page));
@@ -121,6 +142,8 @@ async function humanCheck(page) {
 async function ensureLoggedIn(page, opts = {}) {
   const stateFile = opts.stateFile || STATE_FILE;
   if (await isLoggedIn(page)) return { ok: true, status: 'already' };
+  // Read-only mode: report the state, never type. Lets a person or a test verify the real session safely.
+  if (opts.checkOnly) return { ok: false, status: 'signed_out', detail: 'OnlineJobs session is gone (check only, nothing typed)' };
 
   const state = readState(stateFile);
   const blocked = throttleReason(state);
@@ -130,7 +153,9 @@ async function ensureLoggedIn(page, opts = {}) {
   if (!creds) return { ok: false, status: 'no_credentials', detail: 'set ONLINEJOBS_EMAIL/ONLINEJOBS_PASSWORD, ~/.onlinejobs.env or the claude-onlinejobs Keychain item' };
 
   await page.goto(BASE + '/login', { waitUntil: 'domcontentloaded', timeout: 45000 });
-  const email = page.getByLabel(/email/i).first();
+  // www names its fields info[email]/info[password]; v2 uses plain email/password.
+  const byName = page.locator('input[name="info[email]"], input[type="email"], input[name="email"]').first();
+  const email = (await byName.count().catch(() => 0)) ? byName : page.getByLabel(/email/i).first();
   const password = page.locator('input[type="password"]').first();
   if (!(await email.count().catch(() => 0)) || !(await password.count().catch(() => 0))) {
     return { ok: false, status: 'needs_human', detail: 'login form not found (page changed, or a challenge is showing)' };
@@ -144,7 +169,8 @@ async function ensureLoggedIn(page, opts = {}) {
 
   await email.fill(creds.email);
   await password.fill(creds.password);
-  const submit = page.getByRole('button', { name: /^log ?in$/i }).first();
+  // The button inside the password's own form, so the header's log-in control is never the one clicked.
+  const submit = password.locator('xpath=ancestor::form').getByRole('button', { name: /^log ?in$/i }).first();
   if (await submit.count().catch(() => 0)) await submit.click(); else await password.press('Enter');
 
   // Wait for the page to leave /login, or for an error to show.
@@ -167,7 +193,19 @@ async function ensureLoggedIn(page, opts = {}) {
   return { ok: false, status: 'needs_human', detail: 'still on the login page after submitting, no error text recognised' };
 }
 
-const EXIT = { already: 0, logged_in: 0, needs_human: 3, no_credentials: 5, rejected: 5, throttled: 6 };
+/**
+ * Read-only: is the profile still signed in to Google? Never types. Google blocks scripted sign-in
+ * (device checks, 2-step), so unlike OnlineJobs this is detect-and-tell, not re-login. A Google session
+ * in a profile that is used regularly lasts months, so the realistic failure is rare but silent: Gmail
+ * sends and sign-in-gated Google Forms would fail mid-lead. Probing first turns that into one clear alert.
+ */
+async function googleSignedIn(page) {
+  await page.goto(GOOGLE_PROBE, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+  await page.waitForTimeout(1500).catch(() => {});
+  return !/accounts\.google\.com\/(v\d\/)?(signin|ServiceLogin|AccountChooser)|\/signin\/|identifier/i.test(page.url());
+}
+
+const EXIT = { already: 0, logged_in: 0, needs_human: 3, signed_out: 4, no_credentials: 5, rejected: 5, throttled: 6, google_signed_out: 7 };
 
 async function launch() {
   const { chromium } = require('playwright-core');
@@ -180,12 +218,16 @@ async function launch() {
   });
 }
 
-async function main() {
+async function main(argv = process.argv.slice(2)) {
+  const checkOnly = argv.includes('--check');
   const ctx = await launch();
   let result;
   try {
     const page = ctx.pages()[0] || (await ctx.newPage());
-    result = await ensureLoggedIn(page);
+    result = await ensureLoggedIn(page, { checkOnly });
+    if (result.ok && argv.includes('--google') && !(await googleSignedIn(page))) {
+      result = { ok: false, status: 'google_signed_out', detail: 'the browser profile is signed out of Google' };
+    }
   } finally {
     await ctx.close().catch(() => {});
   }
@@ -193,7 +235,7 @@ async function main() {
   return EXIT[result.status] ?? 1;
 }
 
-module.exports = { ensureLoggedIn, loadCredentials, parseEnvFile, throttleReason, readState, EXIT };
+module.exports = { ensureLoggedIn, googleSignedIn, loadCredentials, parseEnvFile, throttleReason, readState, EXIT };
 
 if (require.main === module) {
   main().then((rc) => process.exit(rc)).catch((e) => { console.error('[onlinejobs-login] error:', e.message); process.exit(1); });

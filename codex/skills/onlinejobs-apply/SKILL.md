@@ -3,10 +3,11 @@ name: onlinejobs-apply
 description: Scheduled, unattended run on the Mac Mini. Applies to the queued OnlineJobs.ph leads whose application is an external form (Google Form, Jotform, Typeform, ATS) or an apply email, for Jiv, through the onlinejobs-browser MCP. Fit-gated, honest, logs every outcome.
 ---
 
-# onlinejobs-apply (Mac Mini, Codex)
+# onlinejobs-apply (Mac Mini)
 
 Port of the MacBook's Claude skill of the same name. Same gates, same recipes. Run by cron through
-`scripts/onlinejobs-apply-mini.sh`; no human is attached, so never ask a question.
+`scripts/onlinejobs-apply-mini.sh` with `claude -p` (it was Codex until 2026-10-22; the folder name is a leftover);
+no human is attached, so never ask a question.
 
 ## Scope
 
@@ -15,8 +16,8 @@ Port of the MacBook's Claude skill of the same name. Same gates, same recipes. R
 - Native OnlineJobs "Apply" is out of scope (autonomousapply.com does it). External forms and apply emails only.
 - Browser = ONLY the `onlinejobs-browser` MCP tools (`browser_navigate`, `browser_snapshot`, `browser_click`,
   `browser_evaluate`, `browser_file_upload`, ...): real Chrome on a profile signed in to Google and OnlineJobs.
-  **Never use `cua_repl`, `node_repl`, computer use or any other browser tool:** they are a different, signed-out
-  browser, and a policy there blocks Gmail (seen 2026-10-22). Never type a
+  **Never use any other browser tool** (`cua_repl`, `node_repl`, computer use): they are a different, signed-out
+  browser, and a policy there blocks Gmail (seen 2026-10-22 under Codex). Never type a
   password. If a page shows a sign-in wall for Google or OnlineJobs, stop that lead, log `handoff` with the note
   "Sign in to Google/OnlineJobs on the Mini browser profile, then re-queue." and move on.
 
