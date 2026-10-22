@@ -148,13 +148,17 @@ class TestJudge(unittest.TestCase):
                          (False, "applied_on_site"))
 
 
-class TestAlert(unittest.TestCase):
-    def test_alert_names_role_wage_and_how_to_apply(self):
-        text = f.build_alert([f.parse_posting(URL, FORM_ROLE), f.parse_posting(URL, EMAIL_ROLE)])
-        self.assertIn("2 new OnlineJobs posting(s)", text)
-        self.assertIn("https://forms.gle/68L6jRPFqM6seaq5A", text)
-        self.assertIn("email jobs@framesports.ai", text)
-        self.assertIn(URL, text)
+class TestMisfitRegressions(unittest.TestCase):
+    """Both were queued and alerted on 2026-10-21/22 before being skipped by hand."""
+    def test_titles_that_passed_only_on_a_stray_ai_or_engineer(self):
+        for title in ("Remote IT Project Engineer III", "Senior Flooring Estimator / QS \u2013 MeasureSquare M8 & AI",
+                      "Network Engineer", "Systems Administrator (AI Ops)", "IT Help Desk Technician"):
+            t = posting(title, "$3000/month", "https://forms.gle/abc123")
+            self.assertEqual(f.judge(f.parse_posting(URL, t)), (False, "misfit_role"), title)
+
+    def test_real_engineering_roles_with_infrastructure_in_the_title_still_pass(self):
+        t = posting("Senior Software Developer (TypeScript & API Infrastructure)", "$3200/month", "https://forms.gle/abc123")
+        self.assertEqual(f.judge(f.parse_posting(URL, t)), (True, ""))
 
 
 if __name__ == "__main__":

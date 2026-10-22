@@ -291,7 +291,8 @@ class Digest(unittest.TestCase):
         d.record_event(st, "meeting", "Marian B", "1", NOW - timedelta(hours=1))
         d.record_event(st, "reply", "Old", "8", NOW - timedelta(hours=30))
         text = d.build_digest(st, NOW)
-        self.assertIn("1 bot replies, 1 meetings alarmed", text)
+        self.assertIn("1 bot replies, 1 meeting requests", text)
+        self.assertNotIn("0 ", text)          # zeros are noise
         self.assertIn("Marian B: meeting, no reply from you yet", text)
         self.assertIn("Ori: take-home due today", text)
         self.assertNotIn("Done Co", text)
@@ -301,6 +302,46 @@ class Digest(unittest.TestCase):
         d.record_event(st, "reply", "Old", "1", NOW - timedelta(days=15))
         d.record_event(st, "reply", "New", "2", NOW)
         self.assertEqual([e["who"] for e in st["events"]], ["New"])
+
+
+class AlertHygiene(unittest.TestCase):
+    """The phone got a push for every blip and an emergency alarm for a mass Discord funnel."""
+    def test_a_blip_that_heals_is_never_mentioned(self):
+        st = {}
+        self.assertIsNone(d.health_step(st, "login", True, NOW))
+        self.assertIsNone(d.health_step(st, "login", True, NOW))
+        self.assertIsNone(d.health_step(st, "login", False, NOW))      # recovered: streak gone
+        self.assertNotIn("login", st["health"])
+
+    def test_discord_at_three_phone_at_six_each_once(self):
+        st, got = {}, []
+        for _ in range(9):
+            got.append(d.health_step(st, "inbox", True, NOW))
+        self.assertEqual(got, [None, None, "info", None, None, "push", None, None, None])
+
+    def test_kinds_are_independent(self):
+        st = {}
+        for _ in range(2):
+            d.health_step(st, "login", True, NOW)
+        self.assertIsNone(d.health_step(st, "inbox", True, NOW))
+        self.assertEqual(d.health_step(st, "login", True, NOW), "info")
+
+    def test_tidy_never_cuts_mid_word_and_drops_the_greeting(self):
+        raw = ("Hi Jiv,\n\nThanks for applying again. The next step is still the one-hour take-home assignment. "
+               "Please email your submission to jobs@framesports.ai within 48 hours of this message. All the best, Lachlan")
+        out = d.tidy(raw, 120)
+        self.assertEqual(out, "Thanks for applying again. The next step is still the one-hour take-home assignment.")
+        self.assertEqual(d.tidy("one two three four five six seven", 15), "one two three...")
+        self.assertEqual(d.tidy("short", 50), "short")
+
+    def test_emergency_alarm_needs_a_link_or_a_concrete_time(self):
+        funnel = ("Hi Jiv, Dave here, founder of E2. I want to talk to you right away. Please join our Discord, "
+                  "say hi in the chat, and we will set up an interview")
+        self.assertEqual(d.alarm_level(funnel), "needs")
+        self.assertEqual(d.alarm_level("Please send me a zoom invite for Friday 10/23 for the interview"), "meeting")
+        self.assertEqual(d.alarm_level("Book here: calendly.com/acme/intro"), "meeting")
+        self.assertEqual(d.alarm_level("When are you available for a call?"), "meeting")
+        self.assertEqual(d.alarm_level("Thanks for applying."), "needs")
 
 
 if __name__ == "__main__":

@@ -67,7 +67,9 @@ ANTHROPIC_KEY = ""
 def log(msg):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     line = f"[{ts}] [OJ] {msg}"
-    print(line)
+    # cron redirects stdout into this same file, so printing there as well wrote every line twice.
+    if sys.stdout.isatty():
+        print(line)
     try:
         with open(LOG_FILE, "a") as f:
             f.write(line + "\n")
@@ -283,9 +285,21 @@ def read_thread(page):
 
 
 def health(state, now, kind, text):
-    """One alert per kind per day when the automation itself is in trouble, so it never fails silently."""
+    """The automation itself is in trouble. Never silent, but never a false alarm either: a blip that
+    heals on the next run says nothing. Discord hears at 3 failed runs in a row, the phone at 6
+    (decide_mod.health_step). Call healthy() on the success path to reset the streak."""
+    level = decide_mod.health_step(state, kind, True, now)
+    if level is None:
+        return
+    runs = state["health"][kind]["streak"]
     decide_mod.record_event(state, "health", kind, kind, now)
-    notify_jiv(text, level="needs", title="OnlineJobs automation problem", key=f"oj:health:{kind}:{now:%Y-%m-%d}")
+    notify_jiv(f"{text} It has failed {runs} runs in a row (about {runs * 30} minutes).",
+               level="needs" if level == "push" else "info", title="OnlineJobs automation problem",
+               key=f"oj:health:{kind}:{level}:{now:%Y-%m-%d-%H}")
+
+
+def healthy(state, now, kind):
+    decide_mod.health_step(state, kind, False, now)
 
 
 def send_digest(state, now):
@@ -340,11 +354,11 @@ def scan_forms(page, state, now):
                 fs["leads"][pid] = lead
             else:
                 skips[why] = skips.get(why, 0) + 1
+        # No alert per lead any more (2026-10-22): they were raw URLs, "N/A" wages and obvious misfits, and
+        # applying is the MacBook runner's job, which reports what it DID. `alerted` stays for old state.
         unalerted = [l for l in fs["leads"].values() if not l.get("alerted")]
-        if unalerted and notify_jiv(forms_mod.build_alert(unalerted), level="info", title="OnlineJobs: apply outside the site",
-                                    key=f"oj:forms:{now:%Y-%m-%d-%H}"):
-            for l in unalerted:
-                l["alerted"] = True
+        for l in unalerted:
+            l["alerted"] = True
         cutoff = (now - timedelta(days=FORMS_KEEP_DAYS)).timestamp()
         fs["leads"] = {i: l for i, l in fs["leads"].items() if l["first_seen"] >= cutoff}
         fs["seen"] = {i: v for i, v in fs["seen"].items() if v[1] >= cutoff - 14 * 86400}
@@ -424,6 +438,7 @@ def run():
             return
 
         log("Logged in successfully")
+        healthy(state, now, "login")
 
         # The whole inbox, not ?unread=true: a thread Jiv opened on his phone is no longer "unread" but
         # may still be waiting on a reply. Rows have no links (data-cy="thread-<id>", click to open),
@@ -441,8 +456,11 @@ def run():
             browser.close()
             return
         if not rows and state["convs"]:
-            # It had threads before and now sees none: far more likely a changed page than an empty inbox.
-            health(state, now, "inbox", "The OnlineJobs inbox shows 0 conversations but it had some before. The page layout probably changed, so nothing is being watched.")
+            # It had threads before and now sees none: a late render or a changed page, not an empty inbox.
+            # Seen 3 times in 3 days and healed each time, so it only counts once it persists.
+            health(state, now, "inbox", "The OnlineJobs inbox shows 0 conversations but it had some before, so nothing is being watched.")
+        else:
+            healthy(state, now, "inbox")
         rows = rows[:MAX_THREADS]
         log(f"Found {len(rows)} conversation(s) in the inbox")
         changed = False
@@ -455,8 +473,8 @@ def run():
             n = decide_mod.nudge_due(known, now)
             if n is not None:
                 hours = int((now - datetime.fromtimestamp(known["alarm_ts"])).total_seconds() // 3600)
-                if notify_jiv(f"{known.get('who', 'A thread')} asked to book a meeting {hours}h ago and you have not answered.",
-                              level="meeting" if n == 1 else "needs", title=f"Still waiting: {known.get('who', 'meeting')}",
+                if notify_jiv(f"{known.get('who', 'A thread')} is still waiting for your answer about a meeting ({hours}h).",
+                              level="needs", title=f"Still waiting: {known.get('who', 'meeting')}",
                               url=known.get("link"), links_from=" ".join(known.get("calendar", [])),
                               key=f"oj:{known.get('code', thread_id)}:nudge{n}"):
                     known["nudges"] = n + 1
@@ -499,7 +517,7 @@ def run():
                 continue
 
             who = msg["name"]
-            body = msg["text"][:400]
+            body = decide_mod.tidy(msg["text"])
             sig = decide_mod.signature(msg["text"])
             cs["who"] = who
             log(f"  {thread_id}/{conv_id} ({who}): {action} {detail}".rstrip())
@@ -516,9 +534,11 @@ def run():
                     cs.pop("resolved", None)
                     decide_mod.record_event(state, "meeting", who, thread_id, now)
                 cs["calendar"] = decide_mod.thread_booking_links(_messages)
-                notify_jiv(f"{who} wants to book a meeting ({detail}). Take over now.\n{body}",
-                           level="meeting", title=f"Meeting ready: {who}", url=link, links_from=msg["links_text"],
-                           key=f"oj:{conv_id}:meeting")
+                # Emergency alarm only with something to act on (a booking link or a concrete time).
+                level = decide_mod.alarm_level(msg["text"] + " " + msg["links_text"])
+                notify_jiv(f"{who} wants to meet: {body}",
+                           level=level, title=(f"Meeting ready: {who}" if level == "meeting" else f"Meeting request: {who}"),
+                           url=link, links_from=msg["links_text"], key=f"oj:{conv_id}:meeting")
                 if not can_reply:
                     cs.pop("row", None)       # night run still sends the courtesy reply; the key stops a second ring
                     continue
@@ -528,10 +548,10 @@ def run():
                 continue
 
             if action in ("handoff_msg", "notify_only", "cap"):
-                why = {"handoff_msg": "New message in a thread you took over.",
-                       "notify_only": "Needs you: it asks for your own work (read the job post, a take-home, a deadline). No reply sent.",
-                       "cap": "Auto-reply paused: 3 replies this week. Needs you."}[action]
-                if notify_jiv(f"{why}\n{who}: {body}", level="needs", title=f"OnlineJobs: {who}", url=link,
+                why = {"handoff_msg": "wrote again in a thread you took over",
+                       "notify_only": "wants your own work (questions, a take-home or a deadline)",
+                       "cap": "wrote again; auto-replies are paused after 3 this week"}[action]
+                if notify_jiv(f"{who} {why}: {body}", level="needs", title=f"OnlineJobs: {who}", url=link,
                               links_from=msg["links_text"], key=f"oj:{conv_id}:{sig}"):
                     cs["sig"] = sig
                     cs["needs_you"] = {"handoff_msg": "new message after you took over", "notify_only": "your own work asked for",
@@ -543,7 +563,7 @@ def run():
             # reply / reply_notify
             if not can_reply:
                 if action == "reply_notify":  # a video/form ask is Jiv's work: tell him now, reply tonight
-                    notify_jiv(f"{who} asked for a video or form. A holding reply goes out tonight.\n{body}",
+                    notify_jiv(f"{who} asked for a video or form. A holding reply goes out tonight: {body}",
                                level="needs", title=f"OnlineJobs needs you: {who}", url=link, links_from=msg["links_text"],
                                key=f"oj:{conv_id}:{sig}")
                     cs["needs_you"] = "video or form requested"
@@ -553,11 +573,16 @@ def run():
             _reply(page, link, conv_id, cs, sig, who, msg, now, state, problems, asset=(action == "reply_notify"))
 
         if read_errors >= 3:
-            health(state, now, "read", f"The OnlineJobs checker could not open {read_errors} conversations this run. The inbox layout may have changed.")
+            health(state, now, "read", f"The OnlineJobs checker could not open {read_errors} conversations in one run.")
+        else:
+            healthy(state, now, "read")
         if problems:
-            health(state, now, "reply", "The OnlineJobs reply step had trouble this run:\n- " + "\n- ".join(problems[:5]))
+            health(state, now, "reply", "The OnlineJobs reply step had trouble:\n- " + "\n- ".join(problems[:5]))
+        else:
+            healthy(state, now, "reply")
         scan_forms(page, state, now)
         send_digest(state, now)
+        healthy(state, now, "crash")      # reached the end: the earlier crash streak is over
         state["last_run"] = now.timestamp()
         save_state(state)
         browser.close()
@@ -615,7 +640,7 @@ def _reply(page, link, conv_id, cs, sig, who, msg, now, state, problems, asset=F
         log(f"  No safe reply drafted for {conv_id} ({fail}), attempt {cs['draft_fails']}")
         if cs["draft_fails"] >= 2:
             # Stop retrying every 30 minutes: hand it to Jiv and mark this message handled.
-            notify_jiv(f"The bot could not write a safe reply to {who} ({fail}). Needs you.\n{msg['text'][:400]}",
+            notify_jiv(f"The bot could not write a safe reply to {who} ({fail}): {decide_mod.tidy(msg['text'])}",
                        level="needs", title=f"OnlineJobs needs you: {who}", url=link, links_from=msg["links_text"],
                        key=f"oj:{conv_id}:{sig}")
             cs["sig"] = sig
@@ -643,7 +668,7 @@ def _reply(page, link, conv_id, cs, sig, who, msg, now, state, problems, asset=F
         cs["needs_you"] = "video or form requested (holding reply sent)"
         cs.pop("resolved", None)
         decide_mod.record_event(state, "needs", who, conv_id, now)
-        notify_jiv(f"{who} asked for a video/form. A holding reply is sent. You owe them the real thing.\n{msg['text'][:400]}",
+        notify_jiv(f"{who} asked for a video or form. A holding reply is sent; you owe them the real thing: {decide_mod.tidy(msg['text'])}",
                    level="needs", title=f"OnlineJobs needs you: {who}", url=link, links_from=msg["links_text"],
                    key=f"oj:{conv_id}:{sig}")
     return True
@@ -657,8 +682,10 @@ def main():
         raise
     except Exception as e:
         log(f"Unhandled error: {type(e).__name__}: {e}")
-        notify_jiv(f"The OnlineJobs checker crashed: {type(e).__name__}: {str(e)[:200]}. Replies and alerts are not running.",
-                   level="needs", title="OnlineJobs automation problem", key=f"oj:health:crash:{datetime.now():%Y-%m-%d}")
+        state = load_state()
+        health(state, datetime.now(), "crash",
+               f"The OnlineJobs checker crashed ({type(e).__name__}: {(str(e).splitlines() or [''])[0][:120]}). Replies and alerts are not running.")
+        save_state(state)
         sys.exit(1)
 
 

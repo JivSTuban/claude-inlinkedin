@@ -20,7 +20,7 @@ import hashlib
 import re
 from datetime import datetime, timedelta
 
-from meeting_signal import meeting_signal
+from meeting_signal import WHEN_RE, meeting_signal
 
 STALE_AFTER = timedelta(hours=48)    # first sight older than this is only baselined
 MAX_BOT_REPLIES = 3                  # per thread per 7 days; mirrors the LinkedIn inbox end gate
@@ -288,14 +288,68 @@ def build_digest(state, now, hours=24):
             open_items.append(f"{c.get('who', tid)}: {c['needs_you']}")
     if not ev and not open_items:
         return None
-    lines = [f"**OnlineJobs, last {hours}h:** {count('reply')} bot replies, {count('meeting')} meetings alarmed, "
-             f"{count('needs')} needing you, {count('health')} problems."]
+    # Only what happened: "0 bot replies, 0 meetings, 0 problems" is a line of zeros nobody reads.
+    parts = [f"{n} {label}" for n, label in ((count('reply'), "bot replies"), (count('meeting'), "meeting requests"),
+                                              (count('needs'), "needing you"), (count('health'), "automation problems"))
+             if n]
+    lines = [f"**OnlineJobs, last {hours}h:** " + (", ".join(parts) if parts else "quiet.")]
     if open_items:
         lines.append("Still open for you:")
         lines += [f"- {x}" for x in open_items[:8]]
         if len(open_items) > 8:
             lines.append(f"- and {len(open_items) - 8} more")
     return "\n".join(lines)
+
+
+# --- alert hygiene (added 2026-10-22) ---------------------------------------------------------
+# The phone got a push for every transient blip (a 30 s login timeout, an inbox that rendered late) and
+# an emergency alarm for a mass "join our Discord" message. Seven false "problems" in three days, all
+# self-healed on the next run. A problem is now news only if it persists, and an alarm only if there is
+# something to act on: a booking link or a concrete time.
+HEALTH_INFO_AT = 3    # consecutive failed runs (30 min apart) before Discord hears about it
+HEALTH_PUSH_AT = 6    # ...and before the phone does
+
+
+def health_step(state, kind, failed, now):
+    """Track consecutive failures of one automation check. Returns None, "info" (tell Discord) or
+    "push" (tell the phone). Each level fires ONCE per streak, on the run that reaches it; a success
+    resets the streak silently, so a blip that heals itself is never mentioned."""
+    h = state.setdefault("health", {})
+    if not failed:
+        h.pop(kind, None)
+        return None
+    rec = h.setdefault(kind, {"streak": 0, "since": now.timestamp()})
+    rec["streak"] += 1
+    if rec["streak"] == HEALTH_PUSH_AT:
+        return "push"
+    if rec["streak"] == HEALTH_INFO_AT:
+        return "info"
+    return None
+
+
+def tidy(text, limit=220):
+    """A readable preview of an employer message: greeting and sign-off dropped, whitespace squashed,
+    cut at a sentence end if one fits, else at a word, never mid-word."""
+    t = _squash(text)
+    t = re.sub(r"^(hi|hello|hey|good (morning|afternoon|evening)|dear)\b[^,.!]{0,40}[,.!]\s*", "", t, flags=re.I)
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if end >= limit * 0.5:
+        return cut[:end + 1]
+    return cut[:cut.rfind(" ")].rstrip(",;:") + "..." if " " in cut else cut + "..."
+
+
+def alarm_level(text):
+    """"meeting" (the iPhone emergency alarm that repeats until acknowledged) only when there is a
+    booking link or a concrete time to act on. A bare "we will set up an interview" is a normal push."""
+    kind = meeting_signal(text)
+    if kind == "link":
+        return "meeting"
+    if kind == "ask" and (WHEN_RE.search(text or "") or re.search(r"\b(are you (free|available)|when (are|can|will|would) you|your availability|what (time|day))", text or "", re.I)):
+        return "meeting"
+    return "needs"
 
 
 # --- availability text that stays correct across the US daylight-saving change ----------------

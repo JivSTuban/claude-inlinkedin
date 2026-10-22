@@ -156,6 +156,32 @@ Most OnlineJobs postings are applied to natively (autonomousapply.com, which spe
 - **Kill switch:** `touch ~/Work/job-email-bot/onlinejobs-forms.disabled` stops only the scan. Three failed scans in a row send one `needs` health alert; replies are never affected (the scan is wrapped so it cannot raise).
 - **Deploy:** `scp scripts/onlinejobs-check.py admin@100.98.219.58:Work/job-email-bot/` and `scp scripts/onlinejobs_forms.py admin@100.98.219.58:agent-work/jobi/scripts/`.
 
+**The trigger (added 2026-10-22).** Until then nothing ran `/onlinejobs-apply`: the Mini queued leads, DMed Jiv, and they sat. Now `com.jiv.onlinejobs-apply` runs `onlinejobs-apply-runner.sh` hourly on the MacBook.
+
+- **Install / update:** `scripts/install-onlinejobs-apply.sh` (idempotent). It copies the six runtime files to `~/.onlinejobs-apply/bin/` and loads the plist. **Not a plist pointing at this repo:** launchd cannot read `~/Desktop` (macOS privacy protection), so such a job fails `/bin/bash: ...: Operation not permitted` on every tick and says nothing. Re-run the installer after editing any of these scripts.
+- **Gate first, Claude second.** `onlinejobs_apply_gate.py` reads the Mini's `forms.leads` over SSH and drops what is already in `~/.claude/skills/onlinejobs-apply/applied.jsonl` by posting URL, form URL, apply email or employer name (the Mini cannot see that file). Exit 0 work, 3 nothing (no Claude session), 2 queue unreadable (loud, never read as "nothing").
+- **The run:** `claude -p "/onlinejobs-apply <leads>"`, `dontAsk`, allowlist = the onlinejobs-browser MCP, ToolSearch, Read, and ONE Bash command: `onlinejobs_log_outcome.py`. It cannot edit files, so logging goes through that helper (writes `applied.jsonl` and `TRACKER.md` together). First attempt let it `Edit` the tracker files and `dontAsk` denied every write outside the repo: it made the right call on the lead and recorded nothing. 40 min cap (`OJ_APPLY_CAP_S`); a kill also closes its Chrome.
+- **Done means logged.** After the run `onlinejobs_apply_report.py unhandled` checks every lead has an outcome in `applied.jsonl`; a lead without one counts as a failed run even if Claude exited 0 (browser signed out, cut off).
+- **Skips a tick** when Chrome already holds the onlinejobs profile (match `user-data-dir=<path>` with `=`; the idle Playwright MCP of every open Claude session uses a space and must not count, and must never be killed), when the API is unreachable, or when a run is active. A sleeping laptop misses ticks; the queue is durable.
+- **Switches:** `touch ~/.onlinejobs-apply/PAUSE` stops it. `onlinejobs-apply-runner.sh --dry-run` runs only the gate; `--leads FILE` works exactly those leads. Logs: `~/.onlinejobs-apply/logs/`. Remove: `launchctl bootout gui/$(id -u)/com.jiv.onlinejobs-apply`.
+- **Tests:** `tests/battle/test_onlinejobs_apply_{gate,report}.py`, `test_onlinejobs_log_outcome.py`. Headless paths proven 2026-10-22 under real launchd: skip + log (22 s), Gmail compose + Drive attachment sent to Jiv's own address, a 6-page Google Form filled to the last page without submitting, the watchdog kill (exit 143, no orphan Chrome, quiet count). A real submitted application has not yet been observed.
+- **Verified quirks:** Gmail's `body=` deep-link parameter does not prefill (the skill now types it). The Drive search can rank other PDFs (`CV.pdf`, 2025 files) above the résumé, so the skill selects by exact name: the attached file is Drive's `resume (2).pdf` (uploaded 2026-10-22; the older `resume (1).pdf` copies there predate the Sep 2026 projects). The Mini's `apply-resume.pdf` and `linkedin-apply`'s `jiv-resume.pdf` are byte-identical to it (md5 `be84ec79...`); if the résumé changes, update all three and Drive. A Google Form's URL turns into `/formResponse` after the first Next; that is not a submission.
+
+**What reaches Jiv's phone (changed 2026-10-22).** Before, every transient blip pushed and a mass "join our Discord" message rang the emergency alarm. Now:
+
+| Event | Where |
+|---|---|
+| Application submitted or sent | Discord, one line per job. Skips are silent. |
+| Application hand-off (sign-in, captcha, file) | Discord + normal push |
+| Meeting request with a booking link, a day or a clock time, or "when are you free" | Discord + EMERGENCY alarm (repeats until acknowledged) |
+| Meeting request without any of those ("we will set up an interview") | Discord + normal push |
+| Reminder for an unanswered meeting (4 h, 24 h) | Discord + normal push (was emergency) |
+| Employer wants your own work / reply cap hit | Discord + normal push, preview cut at a sentence |
+| Automation problem (login, inbox, crash, apply run) | silent for 2 failed runs; Discord at 3 checker runs (~90 min) or 2 apply runs; phone at 6 checker runs or 4 apply runs; a success resets it |
+| New external-application leads | no alert (queued silently) |
+
+Rules live in `onlinejobs_decide.py` (`health_step`, `alarm_level`, `tidy`) and `onlinejobs_apply_report.py`. The checker's `log()` used to print AND append to `followup.log` while cron redirects stdout there too, so every line appeared twice; it now prints only on a terminal. Deploy the checker changes with `scp scripts/onlinejobs-check.py admin@100.98.219.58:Work/job-email-bot/` and `scp scripts/onlinejobs_decide.py scripts/onlinejobs_forms.py admin@100.98.219.58:agent-work/jobi/scripts/`.
+
 ### Email-apply for off-LinkedIn job links (added 2026-10-15)
 
 A job link people DM that is not on LinkedIn (a careers page with `Email careers@...`) is now applied to by email from Jiv's Gmail. Chosen by Jiv 2026-10-15: auto-send with hard caps.

@@ -48,7 +48,10 @@ _DEV_TITLE = re.compile(
 _MISFIT_TITLE = re.compile(
     r"\b(accountant|bookkeep|seo|geo|marketing|appointment setter|virtual assistant|recruit|talent acquisition|"
     r"sales|customer (?:support|service)|phone|content|editor|designer|writer|social media|data entry|"
-    r"hubspot specialist|operations specialist|qa tester|website qa)\b", re.I)
+    r"hubspot specialist|operations specialist|qa tester|website qa|"
+    # Slipped through on 2026-10-21/22: "AI" or "Engineer" in the title is not enough.
+    r"estimator|quantity surveyor|it project|network engineer|(?:system|systems|network) administrator|sysadmin|"
+    r"help ?desk|technician)\b", re.I)
 
 
 def search_url(keyword, offset=0):
@@ -186,14 +189,3 @@ def judge(lead):
     if m is not None and m < RATE_FLOOR_MONTHLY:
         return False, "below_rate_floor"
     return True, ""
-
-
-def build_alert(leads):
-    """Discord text for the leads found this scan. Fewest words: title, wage, how to apply, link."""
-    lines = [f"{len(leads)} new OnlineJobs posting(s) apply outside the site:"]
-    for l in leads[:8]:
-        how = l["form_url"] or f"email {l['apply_email']}"
-        lines.append(f"- {l['title'][:80]} ({l['wage'] or 'wage not listed'})\n  {how}\n  {l['url']}")
-    if len(leads) > 8:
-        lines.append(f"...and {len(leads) - 8} more in oj-state.json forms.leads")
-    return "\n".join(lines)
