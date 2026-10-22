@@ -11,8 +11,10 @@
 # $STATE/claude.env (made once by scripts/onlinejobs-claude-token.sh), because the Mini's login keychain is locked
 # over ssh/cron and a normal `claude` login cannot be read there.
 # Before the model starts, scripts/onlinejobs-ensure-login.js makes sure the browser profile is signed in to
-# OnlineJobs and Google, so an expired session is repaired (OnlineJobs) or reported early (Google) instead of
-# failing a lead halfway through.
+# OnlineJobs, and to Google only when a queued lead is a Google Form, so an expired session is repaired (OnlineJobs)
+# or reported early (Google) instead of failing a lead halfway through. Email applies do not use the browser's Gmail:
+# they go out through scripts/onlinejobs_send_email.py on the Gmail app password (2026-10-23, after a Google
+# "confirm it's you" prompt on the profile stopped four runs in a row while no queued lead needed Google).
 # Cron: 5 * * * * /Users/admin/agent-work/jobi/scripts/onlinejobs-apply-mini.sh >> ~/.onlinejobs-apply/logs/cron.log 2>&1
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin"
 
@@ -32,7 +34,9 @@ MCP_CONFIG="$STATE/mcp.json"
 NODE=""; for c in /opt/homebrew/bin/node "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node" /usr/local/bin/node; do
   [ -x "$c" ] && { NODE="$c"; break; }
 done
-LOGIN_BIN="${OJ_LOGIN_BIN:-$NODE $HERE/onlinejobs-ensure-login.js --google}"
+LOGIN_BIN="${OJ_LOGIN_BIN:-$NODE $HERE/onlinejobs-ensure-login.js}"
+# A lead whose form is a Google Form may need the profile signed in to Google; nothing else does.
+GOOGLE_FORM_RE='docs\.google\.com/forms|forms\.gle/|goo\.gl/forms'
 # Real Chrome holds the profile as "--user-data-dir=<path>" (with =); the idle Playwright MCP node process uses a
 # space and must not count as in use.
 CHROME_PAT="user-data-dir=.*\.onlinejobs-apply/browser-profile"
@@ -85,18 +89,25 @@ if ! perl -e 'alarm shift; exec @ARGV' 30 "$CLAUDE" --version >/dev/null 2>&1 </
 fi
 
 # Sign-in, before the model so a dead session never costs a model run. OnlineJobs is re-signed in with the saved
-# credentials (one attempt, throttled; see the script); Google can only be reported, since it blocks scripted logins.
-say "login check"
+# credentials (one attempt, throttled; see the script); Google can only be reported, since it blocks scripted logins,
+# and is checked only when a Google Form lead is queued.
+GOOGLE_FLAG=""; grep -q -E "$GOOGLE_FORM_RE" "$LEADS" && GOOGLE_FLAG="--google"
+say "login check${GOOGLE_FLAG:+ (with Google)}"
 if [ -z "$OJ_LOGIN_BIN" ] && [ -z "$NODE" ]; then
   say "skip: node not found"; $REPORT failed login "node is missing on the Mini, so the sign-in check cannot run" >> "$LOG" 2>&1; exit 1
 fi
 LOGIN_OUT=$(ONLINEJOBS_PROFILE="$STATE/browser-profile" ONLINEJOBS_STATE_FILE="$STATE/login-state.json" \
-  ONLINEJOBS_ENV_FILE="$HOME/.onlinejobs.env" perl -e 'alarm shift; exec @ARGV' 180 $LOGIN_BIN </dev/null 2>&1); LRC=$?
+  ONLINEJOBS_ENV_FILE="$HOME/.onlinejobs.env" perl -e 'alarm shift; exec @ARGV' 180 $LOGIN_BIN $GOOGLE_FLAG </dev/null 2>&1); LRC=$?
 echo "$LOGIN_OUT" | sed -E 's/(password|token)=[^ ]*/\1=***/Ig' >> "$LOG"
 pkill -f "$CHROME_PAT" 2>/dev/null     # the login helper's Chrome, if the alarm cut it off
 case $LRC in
   0) $REPORT ok login ;;
-  7) say "login: Google signed out"; $REPORT failed login "Sign in to Google in the Mini browser profile (Gmail sends and Google Forms need it). Google blocks scripted sign-in." >> "$LOG" 2>&1; exit 1 ;;
+  7) # Only the Google Form leads need Google: hold them (they stay queued for the next run) and work the rest.
+     HELD=$(grep -c -E "$GOOGLE_FORM_RE" "$LEADS")
+     grep -v -E "$GOOGLE_FORM_RE" "$LEADS" > "$LEADS.tmp"; mv "$LEADS.tmp" "$LEADS"
+     say "login: Google signed out, holding $HELD Google Form lead(s)"
+     $REPORT failed login "Sign in to Google in the Mini browser profile; $HELD Google Form lead(s) wait for it. Google blocks scripted sign-in." >> "$LOG" 2>&1
+     [ -s "$LEADS" ] || exit 1 ;;
   3) say "login: needs a human"; $REPORT failed login "OnlineJobs sign-in needs you: a captcha or a code is showing. Sign in once in the Mini browser profile." >> "$LOG" 2>&1; exit 1 ;;
   5) say "login: credentials missing or rejected"; $REPORT failed login "OnlineJobs rejected the saved password. Update ONLINEJOBS_PASSWORD in ~/.onlinejobs.env on the Mini." >> "$LOG" 2>&1; exit 1 ;;
   6) say "login: throttled, waiting"; $REPORT failed login "OnlineJobs sign-in is paused after a recent failed attempt; it retries by itself." >> "$LOG" 2>&1; exit 1 ;;
@@ -105,10 +116,16 @@ esac
 
 sleep 3                                # let Chrome release the profile lock before the MCP opens it
 LOGCMD="$PY $HERE/onlinejobs_log_outcome.py"
+# The recipient comes from $LEADS inside the script, never from the model. OJ_EMAIL_DRY_RUN=1 tests without sending.
+SENDCMD="$PY $HERE/onlinejobs_send_email.py --leads $LEADS --resume $WORK/jiv-resume.pdf"
+[ "${OJ_EMAIL_DRY_RUN:-0}" = 1 ] && SENDCMD="$SENDCMD --dry-run"
 PROMPT="No human is attached, so never ask a question: read and follow $SKILL_DIR/SKILL.md (its private facts are in $SKILL_DIR/FACTS.md).
 
 Scheduled run. Use ONLY the onlinejobs-browser MCP tools for the browser. Work ONLY these queued leads (already deduped against the tracker). Apply every gate to each one, log EVERY outcome, skips included, and stop when every lead is logged. Log each outcome by running exactly this command (it overrides the form shown in the skill; you cannot edit the tracker files directly):
-$LOGCMD --url <posting url> --title <real title from the live page> --status <submitted|sent|handoff|skipped> --fit <0-100> --note <one line why> [--employer <name>] [--method form|email] [--form-url <url>] [--email <address>]
+$LOGCMD --url <posting url> --title <real title from the live page> --status <submitted|handoff|skipped> --fit <0-100> --note <one line why> [--employer <name>] [--method form|email] [--form-url <url>] [--email <address>]
+Email applies: do NOT use Gmail in the browser. Send with exactly this command; it picks the recipient from the queued lead, attaches the resume, and logs the lead as sent itself (do not log it again). Write line breaks in --body as \n, and put each value in double quotes:
+$SENDCMD --url <posting url> --title <real title> --fit <0-100> --employer <name> --subject <subject> --body <body>
+If it prints 'not sent', log the lead yourself as skipped or handoff with that reason.
 For --status handoff the note must START with the exact action Jiv has to take, under 150 characters, then the reason. If a posting page does not match the queued lead, trust the live page and say so in the note.
 
 $(cat "$LEADS")"
@@ -118,11 +135,12 @@ BEFORE=$(wc -l < "$APPLIED" 2>/dev/null | tr -d ' '); BEFORE=${BEFORE:-0}
 SUM="$STATE/last-summary.txt"
 say "starting claude $MODEL (cap ${CAP_S}s)"
 cd "$WORK" || exit 1
-# dontAsk + a narrow allowlist: the browser MCP, reading the skill, and the one logging command. No shell, no web.
+# dontAsk + a narrow allowlist: the browser MCP, reading the skill, the logging command and the send command.
+# No other shell, no web.
 perl -e 'alarm shift; exec @ARGV' "$CAP_S" "$CLAUDE" -p "$PROMPT" --model "$MODEL" \
   --mcp-config "$MCP_CONFIG" --strict-mcp-config --add-dir "$SKILL_DIR" \
   --permission-mode dontAsk --permission-prompts none \
-  --allowedTools "mcp__onlinejobs-browser__*,ToolSearch,Read,Bash($LOGCMD:*)" \
+  --allowedTools "mcp__onlinejobs-browser__*,ToolSearch,Read,Bash($LOGCMD:*),Bash($SENDCMD:*)" \
   --disallowedTools "Agent,WebFetch,WebSearch" </dev/null > "$SUM" 2>> "$LOG"
 RC=$?
 cat "$SUM" >> "$LOG" 2>/dev/null

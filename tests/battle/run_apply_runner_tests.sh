@@ -16,11 +16,12 @@ scenario() {
   S="$T/.onlinejobs-apply"; mkdir -p "$S/state" "$S/logs"
   echo fake > "$S/resume.pdf"
   [ "$2" = yes ] && echo "CLAUDE_CODE_OAUTH_TOKEN=tok-fake" > "$S/claude.env"
-  echo '{"url":"https://example.test/job/1","title":"Test role","employer":"Acme"}' > "$T/leads.jsonl"
+  local def='{"url":"https://example.test/job/1","title":"Test role","employer":"Acme","apply_email":"jobs@acme.test"}'
+  printf '%s\n' "${LEADS_JSON:-$def}" > "$T/leads.jsonl"
   : > "$T/calls"
   cat > "$T/login" <<E
 #!/bin/bash
-echo "login" >> "$T/calls"; exit $3
+echo "login \$*" >> "$T/calls"; exit $3
 E
   cat > "$T/claude" <<E
 #!/bin/bash
@@ -43,15 +44,28 @@ check "the login helper ran BEFORE claude" '[ "$(grep -n -m1 -E "^(login|claude)
 check "claude gets the browser MCP only, a model, and dontAsk" 'grep -q -e "--strict-mcp-config" "$T/calls" && grep -q -e "--model sonnet" "$T/calls" && grep -q -e "--permission-mode dontAsk" "$T/calls" && grep -q "mcp__onlinejobs-browser__" "$T/calls"'
 check "claude cannot use the web or spawn agents" 'grep -q -e "--disallowedTools Agent,WebFetch,WebSearch" "$T/calls"'
 check "the OAuth token reaches claude and a stray API key does not" 'grep -q "key=none tok=tok-fake" "$T/calls"'
+check "the send command is allowlisted and in the prompt, with the run's lead file" 'grep -q "Bash(python3 $ROOT/scripts/onlinejobs_send_email.py --leads $T/.onlinejobs-apply/leads.jsonl" "$T/calls" && grep -q "onlinejobs_send_email.py --leads .* --url <posting url>" "$T/calls"'
+check "the prompt forbids Gmail in the browser" 'grep -q "do NOT use Gmail in the browser" "$T/calls"'
+check "no Google Form queued: Google is not checked" 'grep -q "^login *$" "$T/calls"'
 check "the prompt carries the exact logging command and the lead" 'grep -q "onlinejobs_log_outcome.py --url <posting url>" "$T/calls" && grep -q "example.test/job/1" "$T/calls"'
 
 scenario notoken no 0 ok
 check "no Claude token: claude and login never start, exit 1" '[ $RC -eq 1 ] && ! grep -q "^claude\|^login" "$T/calls"'
 
-for code in 3 5 6 7; do
+for code in 3 5 6; do
   scenario "login$code" yes $code ok
   check "login helper exit $code: claude never starts, exit 1" '[ $RC -eq 1 ] && grep -q "^login" "$T/calls" && ! grep -q "^claude" "$T/calls"'
 done
+
+GF='{"url":"https://example.test/job/2","title":"Form role","employer":"Beta","form_url":"https://docs.google.com/forms/d/e/x/viewform"}'
+EM='{"url":"https://example.test/job/1","title":"Test role","employer":"Acme","apply_email":"jobs@acme.test"}'
+LEADS_JSON="$GF" scenario gonly yes 7 ok
+check "only a Google Form queued and Google signed out: checked with --google, claude never starts, exit 1" '[ $RC -eq 1 ] && grep -q "^login --google" "$T/calls" && ! grep -q "^claude" "$T/calls"'
+LEADS_JSON="$GF
+$EM" scenario gmix yes 7 ok
+check "Google signed out with an email lead too: the form is held, the email lead is worked" '[ $RC -eq 0 ] && grep -q "holding 1 Google Form" "$T/out" && grep -q "example.test/job/1" "$T/calls" && ! grep -q "example.test/job/2" "$T/calls"'
+check "the held Google Form lead is not counted as unworked" '! grep -q "not worked" "$T/out"'
+unset LEADS_JSON
 
 scenario silent yes 0 silent
 check "claude exits 0 but logs nothing: counted as a failed run (exit 1)" '[ $RC -eq 1 ] && grep -q "not worked" "$T/out"'

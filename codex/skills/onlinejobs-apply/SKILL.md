@@ -15,7 +15,8 @@ no human is attached, so never ask a question.
   They are already deduped against the tracker. Do not browse the board for more.
 - Native OnlineJobs "Apply" is out of scope (autonomousapply.com does it). External forms and apply emails only.
 - Browser = ONLY the `onlinejobs-browser` MCP tools (`browser_navigate`, `browser_snapshot`, `browser_click`,
-  `browser_evaluate`, `browser_file_upload`, ...): real Chrome on a profile signed in to Google and OnlineJobs.
+  `browser_evaluate`, `browser_file_upload`, ...): real Chrome on a profile signed in to OnlineJobs (and to Google
+  when a Google Form lead is queued). Email applies never use this browser; see below.
   **Never use any other browser tool** (`cua_repl`, `node_repl`, computer use): they are a different, signed-out
   browser, and a policy there blocks Gmail (seen 2026-10-22 under Codex). Never type a
   password. If a page shows a sign-in wall for Google or OnlineJobs, stop that lead, log `handoff` with the note
@@ -57,24 +58,27 @@ no human is attached, so never ask a question.
   `submit.jotform.com`). The URL changing to `/formResponse` after the first Next is NOT a submission.
 - A form that asks something only Jiv can know (references, a start date, a real video) = `handoff`.
 
-## Email applies (Gmail in the same browser profile)
+## Email applies (the send command, never Gmail in the browser)
+
+Since 2026-10-23 email applications go out over the Gmail app password, not the browser, so a Google sign-in prompt
+on the profile can no longer stop them. The runner's prompt gives the exact command (`onlinejobs_send_email.py`).
 
 1. Follow the posting's exact subject format and what it wants in the body, verbatim.
-2. Open `https://mail.google.com/mail/u/0/?view=cm&fs=1&tf=1&to=<addr>&su=<subject>`. `to` and `su` prefill; the body
-   does NOT, so click into the Message Body box and type it yourself.
-3. Body: short, tailored to this role, 2 or 3 real facts with numbers, what he has NOT done if the post lists it,
-   links, availability, then name and contact. Always mention where he found the post if asked.
-4. Attach the resume: click "Attach files", then use the file upload tool with
-   `/Users/admin/.onlinejobs-apply/state/jiv-resume.pdf` (the browser may only upload from the working directory).
-   Confirm the chip reads `jiv-resume.pdf (43K)` before sending.
-5. Read the whole draft back from a screenshot, click Send, then open Sent (`#search/to:<addr>+in:sent`) and confirm
-   the message is there. Only then log `sent`.
+2. Body: short, tailored to this role, 2 or 3 real facts with numbers, what he has NOT done if the post lists it,
+   links, availability, then his name and email. Always mention where he found the post if asked. The command
+   rejects a body with a dash (em or en), a phone number, or a link that is not his GitHub, LinkedIn or portfolio,
+   so leave those out.
+3. Run the command once. It takes the recipient from the queued lead (you never pass one), attaches the resume,
+   sends, and logs the lead as `sent` itself. Do not log that lead again.
+4. If it prints `not sent: <reason>`, do not retry and do not open Gmail. Log the lead yourself: `skipped` when the
+   reason is a fit or duplicate, otherwise `handoff` with the reason (an apply address that differs from the queued
+   one is a `handoff`: "Check the apply email for <title>: the page says <x>, the queue says <y>.").
 
 ## Logging (mandatory, one command per lead, nothing else may write files)
 
 ```
 OJ_SKILL_DIR=/Users/admin/.onlinejobs-apply/state python3 /Users/admin/agent-work/jobi/scripts/onlinejobs_log_outcome.py \
-  --url <posting url> --title <real title> --status <submitted|sent|handoff|skipped> --fit <0-100> \
+  --url <posting url> --title <real title> --status <submitted|handoff|skipped> --fit <0-100> \
   --note "<one line>" [--employer <name>] [--method form|email] [--form-url <url>] [--email <address>]
 ```
 
