@@ -32,6 +32,11 @@ say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 # or the runner keeps failing. No desktop banners: they were the same noise on a different screen.
 REPORT="python3 $HERE/onlinejobs_apply_report.py"
 
+# Heartbeat for the Mini's dead-man check (check_apply_runner in onlinejobs-check.py): a sleeping laptop
+# cannot report its own silence, the always-on Mini can. Written before the PAUSE test on purpose, so a
+# deliberate pause does not look like a dead runner. Best effort: it must never block a run.
+ssh -o ConnectTimeout=8 -o BatchMode=yes admin@100.98.219.58 'date +%s > ~/Work/job-email-bot/apply-runner.heartbeat' >/dev/null 2>&1 || true
+
 DRY=0; LEADS_ARG=""
 case "$1" in --dry-run) DRY=1 ;; --leads) LEADS_ARG="$2" ;; esac
 [ -e "$PAUSE" ] && { say "skip: $PAUSE exists"; exit 0; }
@@ -57,7 +62,9 @@ cat "$LEADS" | tee -a "$LOG" | cut -c1-200
 # The browser profile allows ONE Chrome. An interactive session holding it would make this run fail
 # with "Browser is already in use" (2026-10-20), so wait for the next tick instead.
 if pgrep -f "$CHROME_PAT" >/dev/null; then say "skip: onlinejobs-browser is in use"; exit 0; fi
-curl -s -o /dev/null --max-time 8 https://api.anthropic.com || { say "skip: api.anthropic.com unreachable"; exit 0; }
+# Three tries: one DNS or Wi-Fi blip must not cost a whole hourly run (seen 2026-10-22 20:03, fine seconds later).
+reach() { for _ in 1 2 3; do curl -s -o /dev/null --max-time 8 https://api.anthropic.com && return 0; sleep 5; done; return 1; }
+reach || { say "skip: api.anthropic.com unreachable after 3 tries"; exit 0; }
 command -v claude >/dev/null || { say "skip: claude not on PATH"; exit 1; }
 
 PROMPT="/onlinejobs-apply

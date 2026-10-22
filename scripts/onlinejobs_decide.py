@@ -327,6 +327,16 @@ def health_step(state, kind, failed, now):
     return None
 
 
+APPLY_HEARTBEAT_STALE_S = 150 * 60   # runner ticks hourly: one missed tick plus slack, not a blip
+
+
+def heartbeat_stale(beat_ts, now_ts, limit_s=APPLY_HEARTBEAT_STALE_S):
+    """Dead-man check for the MacBook apply runner, which writes a timestamp to the Mini every tick.
+    Why here and not on the laptop: a sleeping or closed laptop cannot report its own silence, the
+    always-on Mini can. None (no heartbeat ever written) is not stale: nothing is late yet."""
+    return beat_ts is not None and now_ts - beat_ts > limit_s
+
+
 def tidy(text, limit=220):
     """A readable preview of an employer message: greeting and sign-off dropped, whitespace squashed,
     cut at a sentence end if one fits, else at a word, never mid-word."""

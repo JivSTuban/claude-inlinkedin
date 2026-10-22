@@ -344,5 +344,19 @@ class AlertHygiene(unittest.TestCase):
         self.assertEqual(d.alarm_level("Thanks for applying."), "needs")
 
 
+class RunnerHeartbeat(unittest.TestCase):
+    def test_a_fresh_beat_is_fine(self):
+        self.assertFalse(d.heartbeat_stale(1000.0, 1000.0 + 3600))           # one hourly tick ago
+
+    def test_one_missed_tick_is_not_stale_yet(self):
+        self.assertFalse(d.heartbeat_stale(1000.0, 1000.0 + 2 * 3600))
+
+    def test_silence_past_the_limit_is_stale(self):
+        self.assertTrue(d.heartbeat_stale(1000.0, 1000.0 + 3 * 3600))
+
+    def test_no_heartbeat_ever_is_not_stale(self):
+        self.assertFalse(d.heartbeat_stale(None, 99999.0))                   # nothing to be late for
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
