@@ -5,15 +5,13 @@
 #
 #   ~/agent-work/jobi/scripts/onlinejobs-browser-signin.sh
 #
-# Why a script and not `open -na "Google Chrome" --args --user-data-dir=...` (what went wrong on 2026-10-23):
-# the runner's browser is Chrome started by Playwright, which adds --use-mock-keychain and --password-store=basic,
-# so the profile's cookies are encrypted with a stand-in key instead of the macOS Keychain. Plain Chrome uses the
-# real Keychain: it cannot read the existing cookies (the OnlineJobs session was lost) and the Google sign-in it
-# saves cannot be read by Playwright. Same flags here, so what you sign in to is what the runner gets.
+# Why a script and not `open -na "Google Chrome" --args --user-data-dir=...`: the runner's browser is Chrome started
+# by Playwright, and cookies saved by any other kind of launch were unreadable to it, so Chrome threw them away and
+# both sessions were lost (2026-10-23, twice: plain Chrome, then Chrome with Playwright's keychain flags copied).
+# onlinejobs-browser-signin.js opens the window THROUGH Playwright, so what you sign in to is what the runner gets.
 # Also sign in HERE, on the Mini, rather than copying a profile from another Mac: Chrome 147+ on macOS can bind a
 # Google session to the Mac's Secure Enclave, so a copied session dies within hours (seen 2026-10-22).
 PROFILE="$HOME/.onlinejobs-apply/browser-profile"
-CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PAT="user-data-dir=.*\.onlinejobs-apply/browser-profile"
 
@@ -23,8 +21,7 @@ fi
 PAUSE="$HOME/.onlinejobs-apply/PAUSE"            # keeps the hourly run off the profile while you sign in
 if [ ! -e "$PAUSE" ]; then touch "$PAUSE"; trap 'rm -f "$PAUSE"' EXIT; fi
 echo "Sign in to Google in the window that opens, then QUIT Chrome (Cmd+Q). The OnlineJobs tab is optional: the script signs in there for you."
-"$CHROME" --user-data-dir="$PROFILE" --use-mock-keychain --password-store=basic --no-first-run \
-  https://mail.google.com https://www.onlinejobs.ph/jobseekers/jobsearch >/dev/null 2>&1
+ONLINEJOBS_PROFILE="$PROFILE" /opt/homebrew/bin/node "$HERE/onlinejobs-browser-signin.js" || { echo "The sign-in window could not open; see above."; exit 1; }
 echo "Chrome closed. Signing in to OnlineJobs if needed, then checking Google the way the scheduled run will..."
 # The same helper and flags as the runner: OnlineJobs is re-signed in with the saved credentials, Google is only read.
 ONLINEJOBS_PROFILE="$PROFILE" ONLINEJOBS_STATE_FILE="$HOME/.onlinejobs-apply/login-state.json" \
