@@ -98,7 +98,7 @@ class Send(unittest.TestCase):
         self.assertEqual(self.go(**{"--fit": "60"}), 2)
 
     def test_bad_drafts_are_refused(self):
-        for body in ("I build things — fast.", "Call me on 09171234567.", "See https://evil.example/x"):
+        for body in ("I build things \u2014 fast.", "Call me on 09171234567.", "See https://evil.example/x"):
             with self.subTest(body=body):
                 self.assertEqual(self.go(**{"--body": body}), 2)
         self.assertFalse(os.path.exists(self.applied))
