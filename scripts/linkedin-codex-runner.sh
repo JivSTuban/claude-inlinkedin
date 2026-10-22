@@ -191,6 +191,11 @@ apply_pass() {
     local sum="$1" kind="${2:-search}" rc n arc npend ids sum2 files scan_args
     local dry=""; [ -n "$DRY_RUN" ] && dry="--dry-run"
     local base=""; [ -n "${LINKEDIN_TEST_BASE:-}" ] && base="--base $LINKEDIN_TEST_BASE"
+    # Jiv, 2026-10-22: no LinkedIn Easy Apply. Switched off with a file (like email-apply.disabled), so it covers both the
+    # DM-link pass in every inbox run and the `apply` mode. Nothing is scanned, opened or submitted while the file exists.
+    if [ -e "$OUTREACH_DIR/easy-apply.disabled" ]; then
+        echo "Apply: LinkedIn Easy Apply is switched off ($OUTREACH_DIR/easy-apply.disabled), nothing scanned or submitted. RUN_STATUS=ok" > "$sum"; return 0
+    fi
     files="--digest $APPLY_DIR/digest.json --profile $OUTREACH_DIR/apply-profile.json --bank $OUTREACH_DIR/apply-answer-bank.json --log $OUTREACH_DIR/apply-log.jsonl"
     rm -rf "$APPLY_DIR"; mkdir -p "$APPLY_DIR"
     scan_args="--applied $OUTREACH_DIR/apply-log.jsonl"

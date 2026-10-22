@@ -240,6 +240,15 @@ fresh dm-fail; mkapply
 FAKE_WALL=1 LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox; RC=$?
 chk '[ $RC -eq 3 ] && grep -q "linkedin_session_expired" "$LOGF"' "dm apply: a login wall in the DM scan fails the run, not silently ok (got $RC)"
 
+# 5e2. Jiv turned LinkedIn Easy Apply off (2026-10-22): with easy-apply.disabled neither the DM-link pass nor
+#      `apply` mode may scan, decide or fill anything, and the run still ends RUN_STATUS=ok.
+fresh dm-off; mkapply; touch "$T/easy-apply.disabled"
+LINKEDIN_INBOX_BIN="$SHIMS/inbox-leads" LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run inbox; RC=$?
+chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/apply-calls" ] && [ ! -e "$SHIMS/decide-called" ]' "easy apply off: a DM job link starts no scan, decision or fill (got $RC)"
+fresh apply-off; mkapply; touch "$T/easy-apply.disabled"
+LINKEDIN_APPLY_BIN="$SHIMS/apply-fake" LINKEDIN_CODEX_BIN="$SHIMS/codex-apply" run apply; RC=$?
+chk '[ $RC -eq 0 ] && [ ! -e "$SHIMS/apply-calls" ] && [ ! -e "$SHIMS/decide-called" ] && grep -q "apply: completed\|apply: RUN_STATUS=ok" "$LOGF"' "easy apply off: apply mode does nothing and still ends ok (got $RC)"
+
 # 5f. job links off LinkedIn: email-apply pass (fake Gmail script + fake Codex, nothing is sent).
 printf '#!/bin/bash\n[ "$1" = read ] && echo %s > "$3"\nexit 0\n' "'{\"threads\":[],\"job_leads\":[{\"name\":\"Ana\",\"thread_url\":\"u\",\"linkedin_job_ids\":[],\"external\":[\"https://acme.example/careers\"]}]}'" > "$SHIMS/inbox-ext"
 cat > "$SHIMS/email-fake" <<'SH'

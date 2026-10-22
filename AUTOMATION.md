@@ -80,6 +80,8 @@ Sign in with email/password in the Chrome window that opens; it closes itself on
 
 ### Easy Apply on the Mini (`linkedin-codex-runner.sh apply`, added 2026-10-01)
 
+> **Switched OFF by Jiv, 2026-10-22: no LinkedIn Easy Apply.** `~/Work/job-email-bot/marketing/outreach/easy-apply.disabled` exists on the Mini. While it does, `apply_pass` returns before scanning, so neither the `apply` mode nor the DM-link pass in every inbox run opens, decides on or submits any Easy Apply job (test: `run_runner_tests.sh` 5e2). No search-based cron was ever installed. Job links people DM are no longer applied to or forwarded, only the normal reply pass sees them; off-LinkedIn links still go through the email-apply pass (`email-apply.disabled` is its own switch). To turn it back on, delete the file, and review `apply-profile.json` first (three preferences are still `null`, `aws`/`docker`/`fastapi` years have no work behind them, the peso pay does not match the USD, and the resume file's Crowdsnare dates disagree with the identity notes).
+
 Same split as the inbox pass: **the script does all the page work, Codex (profile `linkedin-apply`, no browser) only decides.**
 
 ```
