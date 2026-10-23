@@ -35,9 +35,14 @@ const TIMEOUT_S = Number(process.env.SIGNIN_TIMEOUT_S || 1800);
   // Done when the person closes the window (Cmd+Q or the last tab), or at the timeout.
   const closed = new Promise((res) => ctx.on('close', res));
   const watch = setInterval(() => { if (ctx.pages().length === 0) ctx.close().catch(() => {}); }, 1000);
-  const timer = new Promise((res) => setTimeout(res, TIMEOUT_S * 1000));
+  let tid;
+  const timer = new Promise((res) => { tid = setTimeout(res, TIMEOUT_S * 1000); });
   await Promise.race([closed, timer]);
   clearInterval(watch);
+  clearTimeout(tid);
   await ctx.close().catch(() => {});   // a graceful close is what writes the cookies to disk
   console.log('[signin] browser closed');
+  // Exit explicitly: on 2026-10-23 the process stayed alive for 11 hours after the window closed, so the shell
+  // helper never ran its check or lifted the pause.
+  process.exit(0);
 })().catch((e) => { console.error('[signin] error:', e.message); process.exit(1); });
