@@ -61,7 +61,6 @@ CODEX_BIN    = CODEX_STANDALONE if os.path.exists(CODEX_STANDALONE) else "/opt/h
 
 OJ_EMAIL    = ""
 OJ_PASSWORD = ""
-ANTHROPIC_KEY = ""
 
 
 def log(msg):
@@ -375,7 +374,7 @@ def scan_forms(page, state, now):
 
 
 def run():
-    global OJ_EMAIL, OJ_PASSWORD, ANTHROPIC_KEY
+    global OJ_EMAIL, OJ_PASSWORD
 
     # Replies only go out 12 AM-6 AM PHT (16:00-22:59 UTC), but the scan and the ALERTS run all day:
     # a meeting request at 10 AM must ring Jiv at 10 AM, not at midnight. Outside the window the run
@@ -389,7 +388,6 @@ def run():
             cfg = json.load(f)
         OJ_EMAIL    = cfg["email"]
         OJ_PASSWORD = cfg.get("oj_password", cfg.get("app_password", "")).replace(" ", "")
-        ANTHROPIC_KEY = cfg.get("anthropic_key", "")
     except Exception as e:
         log(f"Config error: {e}")
         sys.exit(1)
